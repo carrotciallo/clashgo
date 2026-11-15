@@ -63,6 +63,11 @@ func main() {
 	if err != nil {
 		fatal("store: %v", err)
 	}
+	instance, err := config.AcquireInstance(store.ConfigDir)
+	if err != nil {
+		fatal("instance: %v", err)
+	}
+	defer instance.Close()
 	if err := store.EnsureLayout(); err != nil {
 		fatal("layout: %v", err)
 	}
