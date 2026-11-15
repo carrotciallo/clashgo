@@ -11,7 +11,8 @@ import (
 	"github.com/carrotciallo/clashgo/assets"
 )
 
-// Both tray states use the same line art and alpha mask; only ink changes.
+// Both tray states use the same outlined cat and alpha mask; gray preserves
+// the filled face and dark facial details instead of flattening the silhouette.
 var inactiveTrayIcon = sync.OnceValue(func() []byte {
 	data, err := grayscalePNG(assets.TrayPNG)
 	if err != nil {
@@ -37,7 +38,8 @@ func grayscalePNG(data []byte) ([]byte, error) {
 	for y := source.Bounds().Min.Y; y < source.Bounds().Max.Y; y++ {
 		for x := source.Bounds().Min.X; x < source.Bounds().Max.X; x++ {
 			c := color.NRGBAModel.Convert(source.At(x, y)).(color.NRGBA)
-			gray.SetNRGBA(x, y, color.NRGBA{R: 140, G: 140, B: 140, A: c.A})
+			value := uint8((299*uint32(c.R) + 587*uint32(c.G) + 114*uint32(c.B) + 500) / 1000)
+			gray.SetNRGBA(x, y, color.NRGBA{R: value, G: value, B: value, A: c.A})
 		}
 	}
 	var buf bytes.Buffer
