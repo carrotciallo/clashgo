@@ -49,9 +49,9 @@ func TestTrayUsesSameCatInColorAndGray(t *testing.T) {
 	}
 }
 
-// A usable local proxy must stay colored even when the user disables global
-// capture and connects individual applications to the mixed port directly.
-func TestProxyServiceReadyIndependentOfSystemCapture(t *testing.T) {
+// Manual proxy mode needs a listener; selected TUN mode additionally needs a
+// real interface. An enabled flag and open mixed port cannot prove TUN capture.
+func TestProxyServiceReadyRequiresSelectedTUN(t *testing.T) {
 	for _, tc := range []struct {
 		name                                        string
 		healthy, listening, tun, mismatch, canceled bool
@@ -59,7 +59,7 @@ func TestProxyServiceReadyIndependentOfSystemCapture(t *testing.T) {
 		want                                        bool
 	}{
 		{"manual proxy without system capture", true, true, false, false, false, 200, true},
-		{"tun enabled", true, true, true, false, false, 200, true},
+		{"tun flag with open proxy but no device", true, true, true, false, false, 200, false},
 		{"stopped core", false, true, false, false, false, 200, false},
 		{"listener closed", true, false, false, false, false, 200, false},
 		{"tun flag alone", true, false, true, false, false, 200, false},
@@ -93,7 +93,7 @@ func TestProxyServiceReadyIndependentOfSystemCapture(t *testing.T) {
 			if tc.canceled {
 				cancel()
 			}
-			if got := proxyServiceReady(ctx, core.NewClient(server.URL, ""), port, tc.healthy); got != tc.want {
+			if got := proxyServiceReady(ctx, core.NewClient(server.URL, ""), port, tc.healthy, tc.tun); got != tc.want {
 				t.Fatalf("got %v, want %v", got, tc.want)
 			}
 		})

@@ -18,7 +18,7 @@ func (a *App) currentTrayPresentation() trayPresentation {
 	ready, sample := a.coreOK, a.capture
 	a.mu.Unlock()
 	wanted := a.settings().TUNEnabled
-	active := ready && sample.Active && sample.PID > 0 && a.sup != nil && sample.PID == a.sup.PID()
+	active := ready && sample.Active && sample.TUN == wanted && sample.PID > 0 && a.sup != nil && sample.PID == a.sup.PID()
 	return trayPresentation{CoreReady: ready, TUNWanted: wanted, Active: active}
 }
 
@@ -63,6 +63,8 @@ func (a *App) refreshTrayOnUI() {
 		status = "代理服务可用"
 	} else if !state.CoreReady {
 		status = "代理服务未就绪 · 核心未就绪"
+	} else if state.TUNWanted {
+		status = "TUN 未就绪"
 	}
 	a.tray.SetToolTip("ClashGo · " + status)
 	menu := mygo.NewMenu([]*mygo.MenuItem{

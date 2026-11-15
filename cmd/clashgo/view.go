@@ -574,7 +574,10 @@ func (a *App) pageOverview(c *ui.Context) {
 			caption(c, fmt.Sprintf("混合 %d · 控制 %d", a.settings().MixedPort, a.settings().ControllerPort))
 			sub, tone := "未接管", colFaint
 			if a.settings().TUNEnabled {
-				sub, tone = "虚拟网卡接管中", colOK
+				sub = "虚拟网卡未就绪"
+				if a.currentTrayPresentation().Active {
+					sub, tone = "虚拟网卡接管中", colOK
+				}
 			} else if facts.CaptureOwned {
 				sub, tone = fmt.Sprintf("系统代理 127.0.0.1:%d", a.settings().MixedPort), colOK
 			}

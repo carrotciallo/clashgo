@@ -216,8 +216,14 @@ UI 明确问题：
 - 此轮二进制：`/tmp/clashgo-delivery/clashgo-cat`，源码提交 `9dd2dad`，已安装至 `/home/user/.local/bin/clashgo`。SHA256 `dbc6df3104049ec1ee32be1f0b9e25fda4cd45d64b8b7150fec6606fb9eb0d8e`。hicolor及WhiteSur的ClashGo专用SVG均更新，图标缓存刷新退出0。
 - 更新前应用和两份图标备份：`/home/user/.local/state/binary-backups/before-cat-20261116-0530/`。未直接编辑生产主配置、注册表或密钥文件，未push。
 
-### 托盘正常服务误灰修正
+### 托盘误灰初判被实机故障证据推翻
 
-用户实机反馈：代理服务正常，托盘仍灰。只读确认7897/9097监听、控制器HTTP401，而gsettings mode=none；原因是把系统流量接管误当成代理服务可用的必要条件，遗漏手工配置应用代理的正常用法。
+用户先反馈服务正常而托盘仍灰。仅凭7897/9097监听、控制器HTTP401和gsettings mode=none，曾误判为手工代理场景，提交 `c466353` 放宽颜色条件。该版本**没有安装**。随后用户指出UI处于虚拟网卡模式，Chrome/Muse均无法访问Google，必须以TUN失败处理，不能靠改颜色掩盖故障。
 
-改为自有核心健康、鉴权控制器返回匹配的mixed-port、该本地端口可建立TCP连接时显示彩色；否则灰度。不再依赖系统代理所有权、TUN开关或网卡状态；保留核心PID代际检查。悬浮提示改为“代理服务可用/未就绪”，不声称全系统已接管或远端线路可达。先改钉子测试，覆盖手工代理、TUN、停核、监听关闭、仅TUN标志、端口不匹配、401/503及取消；原有系统代理所有权测试保留。
+### TUN权限故障恢复与就绪验收
+
+- 直接原因：生产核心日志 `Start TUN listening error: configure tun interface: operation not permitted`。虽然 `/usr/bin/mihomo` 已有 `cap_net_admin,cap_net_raw=ep`，但此前从代理执行环境直接启动应用，继承 `NoNewPrivs: 1`，应用/核心的 `CapEff` 均为0，文件能力被屏蔽。核心控制器和混合端口仍启动，所以旧版 `/version` 验收误报健康；UI又直接按设置显示“虚拟网卡接管中”。
+- 恢复方式：正常退出受限实例，经现有用户systemd manager启动瞬态 `clashgo-recovery.service`，没有更改执行环境的安全限制、持久化unit或生产配置。恢复后应用<pid>/core<pid>的 `NoNewPrivs: 0`，核心 `CapEff: 0x3000`，Meta网卡UP且MTU1500。Google经TUN和显式7897分别返回204，GitHub经TUN返回200。某私有上游的502/ETIMEDOUT是否同因仍未证实；没有读取其凭据。
+- 代码修复：启动前识别会屏蔽网络文件能力的NoNewPrivs环境并明确报错，不自动提权或规避限制；启动、配置激活、回滚及运行配置重载均在宣称成功前核验真实TUN网卡。控制器enable标志不是成功证据，必须有命名网卡、UP、非回环、MTU1500；检查受取消/超时约束，失败不继续接管。
+- 撤销 `c466353` 对TUN门槛的错误放宽。保留手工代理模式的端口检查；选中TUN时额外检查实际网卡，恢复采样模式及核心PID隔离。概览不再凭设置显示接管中，失败显示“虚拟网卡未就绪”，托盘灰色并标注“TUN 未就绪”。
+- 钉子测试先改：明确“/version正常、代理端口开放、TUN enable=true、但网卡不存在”必须失败；覆盖NoNewPrivs及能力组合、设备缺失/未UP/MTU错误/回环、取消与超时。保留系统代理所有权与既有测试基线。全量离线测试、race、vet通过；不在生产制造TUN故障进行测试。后续部署必须由正常桌面或用户服务启动，不能直接继承本执行环境。

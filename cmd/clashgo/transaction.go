@@ -61,6 +61,11 @@ func (a *App) commitConfiguration(next config.Settings, source string, replaceSo
 	restart := old.MixedPort != next.MixedPort || old.ControllerPort != next.ControllerPort || old.TUNEnabled != next.TUNEnabled || oldBin != bin
 	nextClient := core.NewClient(fmt.Sprintf("http://127.0.0.1:%d", next.ControllerPort), next.ControllerSecret)
 	validate := func(paths map[string]string) error {
+		if activate && next.TUNEnabled && (restart || !wasRunning) {
+			if err := core.CheckTUNLaunch(); err != nil {
+				return err
+			}
+		}
 		if p, ok := paths[runtimePath]; ok {
 			return core.ValidateConfig(bin, a.store.RuntimeDir(), p)
 		}
@@ -104,6 +109,9 @@ func (a *App) commitConfiguration(next config.Settings, source string, replaceSo
 				if err := oldClient.ReloadConfig(runtimePath); err != nil {
 					return err
 				}
+			}
+			if err := a.waitTUNReady(nextClient, next.TUNEnabled); err != nil {
+				return err
 			}
 			px := oldProxy
 			if restart {
@@ -152,6 +160,9 @@ func (a *App) commitConfiguration(next config.Settings, source string, replaceSo
 				}
 			} else {
 				e = oldClient.ReloadConfig(runtimePath)
+			}
+			if e == nil && wasRunning {
+				e = a.waitTUNReady(oldClient, old.TUNEnabled)
 			}
 			a.mu.Lock()
 			a.coreOK = wasRunning && e == nil

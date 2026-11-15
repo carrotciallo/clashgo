@@ -257,7 +257,13 @@ func (a *App) installRuntime(reload bool) error {
 	}
 	var activate func(string) error
 	if reload && a.sup.Running() {
-		activate = a.client().ReloadConfig
+		activate = func(path string) error {
+			client := a.client()
+			if err := client.ReloadConfig(path); err != nil {
+				return err
+			}
+			return a.waitTUNReady(client, a.settings().TUNEnabled)
+		}
 	}
 	return config.InstallRuntime(a.store.RenderedPath(), rendered, func(path string) error {
 		return core.ValidateConfig(a.corePath(), a.store.RuntimeDir(), path)
@@ -353,14 +359,25 @@ func (a *App) startCore() {
 	a.setBusy(true, "启动核心…")
 	defer a.setBusy(false, "")
 	core.SeedGeodata(a.store.RuntimeDir(), core.GeodataDirs())
-	if err := a.sup.Start(a.store.RenderedPath()); err != nil {
+	var err error
+	if a.settings().TUNEnabled {
+		err = core.CheckTUNLaunch()
+	}
+	if err == nil {
+		err = a.sup.Start(a.store.RenderedPath())
+	}
+	if err != nil {
 		a.mu.Lock()
 		a.coreOK, a.coreErr = false, err.Error()
 		a.mu.Unlock()
 		a.setMsg("核心启动失败：%v", err)
 		return
 	}
-	if err := a.client().WaitReady(20 * time.Second); err != nil {
+	err = a.client().WaitReady(20 * time.Second)
+	if err == nil {
+		err = a.waitTUNReady(a.client(), a.settings().TUNEnabled)
+	}
+	if err != nil {
 		a.sup.Stop()
 		a.mu.Lock()
 		a.coreOK = false
