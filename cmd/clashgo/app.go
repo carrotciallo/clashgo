@@ -30,6 +30,7 @@ type App struct {
 	editProfileName, editProfileText, editProfileBase string
 	dlgEditProfile                                    bool
 	settingsBusy                                      bool
+	refreshSchedule                                   subs.Schedule
 	stateMu                                           sync.RWMutex
 	opMu                                              sync.Mutex
 	store                                             *config.Store
@@ -1305,14 +1306,13 @@ func (a *App) addSubscription() {
 	})
 }
 
-func (a *App) fetchSubscription(name string, reRender bool) {
+func (a *App) fetchSubscription(name string, _ bool) error {
 	sub := a.reg.Find(name)
 	if sub == nil {
-		return
+		return fmt.Errorf("subscription removed")
 	}
 	if sub.Local {
-		a.setMsg("订阅 %s 是本地内容，没有可刷新的地址", name)
-		return
+		return fmt.Errorf("local subscription cannot refresh")
 	}
 	a.setBusy(true, "抓取订阅 "+name+"…")
 	defer a.setBusy(false, "")
@@ -1320,25 +1320,20 @@ func (a *App) fetchSubscription(name string, reRender bool) {
 	defer cancel()
 	if err := a.reg.Fetch(ctx, name, a.store.ProvidersDir()); err != nil {
 		a.setMsg("订阅 %s 刷新失败（旧节点保留）：%v", name, err)
-		return
+		return err
 	}
-	sub = a.reg.Find(name)
-	if sub == nil {
-		return
+	// Always re-render: a pool can gain or lose inline dialer plumbing.
+	if err := a.renderAndInstall(); err != nil {
+		a.setMsg("订阅 %s 已下载，但运行配置未更新：%v", name, err)
+		return err
 	}
-	if reRender || sub.Split {
-		// Split subscriptions carry groups, not just a provider file:
-		// a provider reload is not enough, the config must re-render.
-		a.setMsg("订阅 %s 已更新（%d 个节点），应用配置…", name, sub.NodeCount)
-		a.applyConfig()
-	} else if a.sup.Running() {
-		if err := a.client().UpdateProvider(name); err != nil {
-			a.setMsg("订阅 %s 已更新（%d 个节点），但核心重载 provider 失败：%v", name, sub.NodeCount, err)
-			return
-		}
-		a.setMsg("订阅 %s 已更新（%d 个节点）", name, sub.NodeCount)
+	if a.sup.Running() {
 		a.refreshProxies()
 	}
+	if sub = a.reg.Find(name); sub != nil {
+		a.setMsg("订阅 %s 已更新（%d 个节点）", name, sub.NodeCount)
+	}
+	return nil
 }
 
 // applyQRCode lands a decoded QR payload in the add-subscription
@@ -1355,7 +1350,18 @@ func (a *App) applyQRCode(s string) {
 }
 
 func (a *App) refreshSubscription(name string) {
-	a.operate(func() { a.fetchSubscription(name, false) })
+	sub := a.reg.Find(name)
+	if sub == nil {
+		return
+	}
+	if sub.Local {
+		a.setMsg("本地订阅没有可刷新的地址")
+		return
+	}
+	if !a.refreshSchedule.Claim(*sub, time.Now(), true) {
+		return
+	}
+	a.operate(func() { err := a.fetchSubscription(name, false); a.refreshSchedule.Finish(name, time.Now(), err) })
 }
 
 func (a *App) removeSubscription(name string) {
@@ -1364,7 +1370,9 @@ func (a *App) removeSubscription(name string) {
 			a.setMsg("删除失败：%v", err)
 			return
 		}
+		a.refreshSchedule.Forget(name)
 		_ = os.Remove(filepath.Join(a.store.ProvidersDir(), name+".yaml"))
+		_ = os.Remove(filepath.Join(a.store.ProvidersDir(), name+".plumbing.yaml"))
 		a.setMsg("订阅 %s 已删除", name)
 		a.applyConfig()
 	})

@@ -198,4 +198,5 @@ func (a *App) bootstrap(ctx context.Context) {
 	a.applyConfig()
 	a.work.Go(a.pollLoop)
 	a.work.Go(a.dnsLogLoop)
+	a.work.Go(a.subscriptionLoop)
 }
