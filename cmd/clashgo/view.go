@@ -494,9 +494,9 @@ func (a *App) pageOverview(c *ui.Context) {
 					fabIcon = lucide.Pause()
 				}
 				fab := ui.Column(c).Width(58).Height(58).Radius(29).
-					LinearGradient(ui.LinearGradient{From: colAccent, To: colBrand, Angle: 135}).
-					Shadow(0, 6, 16, 0, colAccent.Alpha(0.35)).
-					AlignItems(ui.Center).Padding(17).TextColor(ui.Hex("#FFFFFF"))
+					LinearGradient(ui.LinearGradient{From: colBrand, To: colBrand.Mix(ui.Hex("#FFFFFF"), 0.30), Angle: 135}).
+					Shadow(0, 6, 16, 0, colAccent.Alpha(0.18)).
+					AlignItems(ui.Center).Padding(17).TextColor(ui.Hex("#34364B"))
 				fab.Children(func() { ov.Icon(c, fabIcon).Size(24, 24) })
 				fab.Label(map[bool]string{true: "暂停核心", false: "启动核心"}[coreOK])
 				if fab.Clicked() {

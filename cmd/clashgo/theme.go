@@ -6,14 +6,14 @@ import (
 	ovtheme "github.com/oneo-me/onevra/source/theme"
 )
 
-// Lavender-blue identity (user-set at project start): #8B9CF9 is the
-// brand color (fills, washes, tray disc); a deepened sibling serves as
+// Pale lavender identity (user-selected palette C): #CAD1FA is the
+// brand color (fills, washes, cat icon); a deepened sibling serves as
 // the interactive accent so white labels stay legible on buttons and
 // switches. The whole UI derives from the theme installed per frame in
 // view(), so Onevra components pick the colors up automatically — no
 // per-widget hardcoding.
 var (
-	colBrand  = ui.Hex("#8B9CF9")
+	colBrand  = ui.Hex("#CAD1FA")
 	colAccent = ui.Hex("#5B67D8")
 	// colAmber marks the default profile (Shadowrocket's orange dot).
 	colAmber = ui.Hex("#F0A23C")
@@ -103,10 +103,13 @@ func lavenderTheme(c *ui.Context) *ui.Theme {
 func syncPalette(t *ui.Theme) {
 	colBg, colPanel, colText, colMuted, colBorder = t.Background, t.Surface, t.Text, t.TextMuted, t.Border
 	colDanger, colWarn, colOK = t.Danger, t.Warning, t.Success
-	colRail = t.Background.Mix(t.Accent, 0.035)
+	colRail = t.Background.Mix(colBrand, 0.10)
 	colInset = t.Text.Alpha(0.05)
 	colHover = t.Text.Alpha(0.045)
-	colWash = t.Accent.Alpha(0.10)
+	colWash = colBrand.Alpha(0.24)
+	if t.Dark {
+		colWash = colBrand.Alpha(0.10)
+	}
 	colFaint = t.TextMuted.Mix(t.Background, 0.30)
 	colZebra = t.Text.Alpha(0.022)
 	colShadowCol = ui.RGBA(0, 0, 0, 0.10)
