@@ -58,6 +58,7 @@ type App struct {
 	mu          sync.Mutex
 	page        int
 	msg         string
+	msgUntil    time.Time // zero means task progress, not an expiring result
 	busy        bool
 	coreOK      bool
 	coreErr     string
@@ -178,24 +179,53 @@ type recentConn struct {
 
 var ruleTypes = []string{"DOMAIN-SUFFIX", "DOMAIN", "DOMAIN-KEYWORD", "IP-CIDR", "GEOSITE", "GEOIP", "PROCESS-NAME", "MATCH"}
 
+const messageLifetime = 5 * time.Second
+
 func (a *App) setMsg(format string, args ...any) {
 	a.mu.Lock()
+	defer a.mu.Unlock()
 	a.msg = fmt.Sprintf(format, args...)
-	a.mu.Unlock()
+	a.msgUntil = time.Time{}
+	if a.msg != "" {
+		a.msgUntil = time.Now().Add(messageLifetime)
+	}
 }
 
 func (a *App) setBusy(b bool, msg string) {
 	a.mu.Lock()
+	defer a.mu.Unlock()
+	wasBusy := a.busy
 	a.busy = b
 	if msg != "" {
 		a.msg = msg
+		a.msgUntil = time.Time{}
+		if !b {
+			a.msgUntil = time.Now().Add(messageLifetime)
+		}
+	} else if !b {
+		if a.msgUntil.IsZero() {
+			// Do not leave an obsolete progress message after task completion.
+			a.msg = ""
+		} else if wasBusy {
+			// A result often arrives just before the deferred busy reset.
+			a.msgUntil = time.Now().Add(messageLifetime)
+		}
 	}
-	a.mu.Unlock()
 }
 
 func (a *App) snapshot() (msg string, busy, coreOK bool, coreErr, egress string, up, down int64) {
+	return a.snapshotAt(time.Now())
+}
+
+// Expire on render/snapshot instead of spawning timers that could clear newer
+// results. The first frame after reopening also drops any expired feedback.
+func (a *App) snapshotAt(now time.Time) (msg string, busy, coreOK bool, coreErr, egress string, up, down int64) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	if !a.busy && !a.msgUntil.IsZero() && !now.Before(a.msgUntil) {
+		a.msg = ""
+		a.msgUntil = time.Time{}
+	}
 	return a.msg, a.busy, a.coreOK, a.coreErr, a.egress, a.up, a.down
 }
 
