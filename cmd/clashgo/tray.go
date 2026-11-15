@@ -1,31 +1,16 @@
 package main
 
 import (
-	"bytes"
-	"image"
-	"image/color"
-	"image/png"
 	"log"
 
+	"github.com/carrotciallo/clashgo/assets"
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 )
 
-// trayIconPNG draws the placeholder tray glyph: a lavender-blue disc.
+// trayIconPNG shares the application mark with the desktop launcher.
 func trayIconPNG() []byte {
-	img := image.NewNRGBA(image.Rect(0, 0, 32, 32))
-	ink := color.NRGBA{R: 139, G: 156, B: 249, A: 255}
-	for y := 0; y < 32; y++ {
-		for x := 0; x < 32; x++ {
-			dx, dy := x-16, y-16
-			if dx*dx+dy*dy <= 110 {
-				img.SetNRGBA(x, y, ink)
-			}
-		}
-	}
-	var buf bytes.Buffer
-	_ = png.Encode(&buf, img)
-	return buf.Bytes()
+	return assets.IconPNG
 }
 
 func (a *App) initTray() {
