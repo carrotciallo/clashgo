@@ -59,6 +59,7 @@ func detachFromTerminal() {
 func main() {
 	detachFromTerminal()
 	log.SetFlags(log.Ltime)
+	startupStarted := time.Now()
 	store, err := config.NewStore()
 	if err != nil {
 		fatal("store: %v", err)
@@ -105,8 +106,9 @@ func main() {
 		}
 	}
 	a := &App{
-		work:  core.NewTasks(context.Background()),
-		store: store, set: set, reg: reg, coreBin: coreBin,
+		startupStarted: startupStarted,
+		work:           core.NewTasks(context.Background()),
+		store:          store, set: set, reg: reg, coreBin: coreBin,
 		delays:          map[string]map[string]int{},
 		setArm:          set.ArmProxyOnStart,
 		setCorePath:     set.CorePath,
@@ -126,6 +128,7 @@ func main() {
 	}
 	a.cli = core.NewClient(fmt.Sprintf("http://127.0.0.1:%d", set.ControllerPort), set.ControllerSecret)
 	a.px = sysproxy.New(store.StateDir, set.MixedPort)
+	a.startupMark("state_loaded")
 
 	// Self-heal before anything else: a previous unclean exit may have
 	// left the system proxy pointing at a dead core.
@@ -134,6 +137,7 @@ func main() {
 		log.Printf("clashgo: healed stale system proxy left by an unclean exit")
 	}
 	a.px.BeginSession()
+	a.startupMark("proxy_session_ready")
 
 	sigc := make(chan os.Signal, 2)
 	signal.Notify(sigc, syscall.SIGTERM, syscall.SIGINT)
@@ -150,6 +154,7 @@ func main() {
 		if !(a.autostartLaunch && set.SilentAutostart) {
 			a.openWindow()
 		}
+		a.startupMark("ui_ready")
 		a.work.Go(a.bootstrap)
 	})
 	// OnBeforeQuit fires before any window is closed during a quit, so
@@ -173,6 +178,7 @@ func main() {
 // fast operation; without them the core tries to fetch providers
 // during validation and can stall on a slow airport.
 func (a *App) bootstrap(ctx context.Context) {
+	defer a.startupFinished.Store(true)
 	a.opMu.Lock()
 	defer a.opMu.Unlock()
 	if a.healed {
@@ -195,6 +201,7 @@ func (a *App) bootstrap(ctx context.Context) {
 		return
 	}
 	_ = a.reg.Save()
+	a.startupMark("provider_cache_ready")
 	a.applyConfig()
 	a.work.Go(a.pollLoop)
 	a.work.Go(a.dnsLogLoop)

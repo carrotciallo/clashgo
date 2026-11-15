@@ -50,10 +50,12 @@ type App struct {
 	// framework quit) from a window close: closes hide to the tray,
 	// quits let the window die. Set from OnBeforeQuit (fires before
 	// any window closes) and by requestQuit.
-	quitting atomic.Bool
-	quitDone atomic.Bool
-	quitOnce sync.Once
-	work     *core.Tasks
+	quitting        atomic.Bool
+	quitDone        atomic.Bool
+	quitOnce        sync.Once
+	work            *core.Tasks
+	startupStarted  time.Time
+	startupFinished atomic.Bool
 
 	renderMu    sync.Mutex
 	mu          sync.Mutex
@@ -280,6 +282,7 @@ func (a *App) applyConfig() {
 		a.setMsg("配置未生效，旧配置保持不变：%v", err)
 		return
 	}
+	a.startupMark("config_validated")
 	if a.sup.Running() {
 		a.setMsg("配置已生效")
 	} else {
@@ -373,7 +376,11 @@ func (a *App) startCore() {
 		a.setMsg("核心启动失败：%v", err)
 		return
 	}
+	a.startupMark("core_spawned")
 	err = a.client().WaitReadyContext(a.appContext(), 20*time.Second)
+	if err == nil {
+		a.startupMark("controller_ready")
+	}
 	if err == nil {
 		err = a.waitTUNReady(a.client(), a.settings().TUNEnabled)
 	}
@@ -418,8 +425,10 @@ func (a *App) startCore() {
 	}
 	// Publish verified local readiness before optional dashboard/network work.
 	a.refreshCaptureStatus()
+	a.startupMark("capture_checked")
 	a.refreshProxies()
 	a.refreshMode()
+	a.startupMark("dashboard_loaded")
 	a.refreshEgress()
 }
 
