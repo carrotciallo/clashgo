@@ -220,6 +220,25 @@ func (c *Client) TrafficTotals() (up, down int64, err error) {
 	return resp.UploadTotal, resp.DownloadTotal, nil
 }
 
+// CaptureConfig describes the live capture settings returned by GET /configs.
+type CaptureConfig struct {
+	MixedPort int `json:"mixed-port"`
+	TUN       struct {
+		Enable bool   `json:"enable"`
+		Device string `json:"device"`
+	} `json:"tun"`
+}
+
+func (c *Client) CaptureConfig(ctx context.Context) (CaptureConfig, error) {
+	var config CaptureConfig
+	b, err := c.doContext(ctx, http.MethodGet, "/configs", nil)
+	if err != nil {
+		return config, err
+	}
+	err = json.Unmarshal(b, &config)
+	return config, err
+}
+
 // ConfigMode returns the running core's routing mode (rule/global/direct).
 func (c *Client) ConfigMode() (string, error) {
 	b, err := c.do(http.MethodGet, "/configs", nil)

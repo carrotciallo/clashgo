@@ -3,18 +3,27 @@ package main
 import (
 	"log"
 
-	"github.com/carrotciallo/clashgo/assets"
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 )
 
-// trayIconPNG shares the application mark with the desktop launcher.
-func trayIconPNG() []byte {
-	return assets.IconPNG
+type trayPresentation struct {
+	CoreReady bool
+	TUNWanted bool
+	Active    bool
+}
+
+func (a *App) currentTrayPresentation() trayPresentation {
+	a.mu.Lock()
+	ready, sample := a.coreOK, a.capture
+	a.mu.Unlock()
+	wanted := a.settings().TUNEnabled
+	active := ready && sample.Active && sample.TUN == wanted && sample.PID > 0 && a.sup != nil && sample.PID == a.sup.PID()
+	return trayPresentation{CoreReady: ready, TUNWanted: wanted, Active: active}
 }
 
 func (a *App) initTray() {
-	tray, err := mygo.NewTray(mygo.TrayOptions{Icon: trayIconPNG(), ToolTip: "ClashGo"})
+	tray, err := mygo.NewTray(mygo.TrayOptions{Icon: trayIconPNG(false), ToolTip: "ClashGo · 代理未生效"})
 	if err != nil {
 		log.Printf("clashgo: tray: %v", err)
 		return
@@ -30,17 +39,32 @@ func (a *App) initTray() {
 }
 
 func (a *App) refreshTray() {
+	a.onUI(a.refreshTrayOnUI)
+}
+
+func (a *App) refreshTrayOnUI() {
 	if a.tray == nil {
 		return
 	}
+	state := a.currentTrayPresentation()
+	if a.trayState != nil && *a.trayState == state {
+		return
+	}
+	if err := a.tray.SetIcon(trayIconPNG(state.Active), false); err != nil {
+		log.Printf("clashgo: tray state: %v", err)
+		return
+	}
 	captureLabel := "切换到 TUN 模式"
-	if a.settings().TUNEnabled {
+	if state.TUNWanted {
 		captureLabel = "切换到系统代理"
 	}
-	status := "核心未就绪"
-	if a.coreHealthy() {
-		status = "核心运行中"
+	status := "代理未生效"
+	if state.Active {
+		status = "代理已生效"
+	} else if !state.CoreReady {
+		status = "代理未生效 · 核心未就绪"
 	}
+	a.tray.SetToolTip("ClashGo · " + status)
 	menu := mygo.NewMenu([]*mygo.MenuItem{
 		{Label: "ClashGo · " + status},
 		{Label: "打开主窗口", Click: func(*mygo.MenuItem, *mygo.Window) { a.openWindow() }},
@@ -50,6 +74,7 @@ func (a *App) refreshTray() {
 		{Role: mygo.RoleQuit},
 	})
 	a.tray.SetMenu(menu)
+	a.trayState = &state
 }
 
 // openWindow shows the main window, creating it on first use. The
@@ -74,6 +99,9 @@ func (a *App) openWindow() {
 		Height:  620,
 		Content: ui.View(a.view),
 	})
+	if err := w.SetIcon(trayIconPNG(true)); err != nil {
+		log.Printf("clashgo: window icon: %v", err)
+	}
 	w.OnClose(func(e *mygo.CloseEvent) {
 		if a.quitting.Load() {
 			return // real quit: let it close

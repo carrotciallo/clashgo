@@ -42,8 +42,9 @@ type App struct {
 	coreBin                                           string
 	healed                                            bool
 
-	tray *mygo.Tray
-	win  *mygo.Window
+	tray      *mygo.Tray
+	trayState *trayPresentation // UI thread only
+	win       *mygo.Window
 
 	// quitting distinguishes a real quit (tray Quit, exit button,
 	// framework quit) from a window close: closes hide to the tray,
@@ -61,6 +62,7 @@ type App struct {
 	msgUntil    time.Time // zero means task progress, not an expiring result
 	busy        bool
 	coreOK      bool
+	capture     captureSample // guarded by mu
 	coreErr     string
 	egress      string
 	egressOrg   string // org (ISP/AS name) of the current egress IP
@@ -598,6 +600,7 @@ func (a *App) pollTick(ticks *int) {
 			a.setMsg("代理所有权检查失败：%v", err)
 		}
 	}
+	a.refreshCaptureStatus()
 	if open {
 		a.refreshOverviewFacts()
 	}
