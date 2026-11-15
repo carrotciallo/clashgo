@@ -7,7 +7,6 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -33,6 +32,7 @@ type App struct {
 	refreshSchedule                                   subs.Schedule
 	stateMu                                           sync.RWMutex
 	opMu                                              sync.Mutex
+	egressRead                                        latestRead
 	store                                             *config.Store
 	set                                               config.Settings
 	reg                                               *subs.Registry
@@ -416,10 +416,11 @@ func (a *App) startCore() {
 	} else {
 		a.setMsg("")
 	}
+	// Publish verified local readiness before optional dashboard/network work.
+	a.refreshCaptureStatus()
 	a.refreshProxies()
 	a.refreshMode()
 	a.refreshEgress()
-	a.refreshTray()
 }
 
 func (a *App) restartCore() {
@@ -511,51 +512,21 @@ func (a *App) requestQuit() {
 	})
 }
 
-func (a *App) refreshEgress() {
-	a.operate(func() {
-		port := a.settings().MixedPort
-		tr := &http.Transport{Proxy: http.ProxyURL(&url.URL{Scheme: "http", Host: fmt.Sprintf("127.0.0.1:%d", port)})}
-		cl := &http.Client{Transport: tr, Timeout: 15 * time.Second}
-		defer cl.CloseIdleConnections()
-		req, _ := http.NewRequestWithContext(a.appContext(), http.MethodGet, "https://www.cloudflare.com/cdn-cgi/trace", nil)
-		resp, err := cl.Do(req)
-		if err != nil {
-			return
-		}
-		defer resp.Body.Close()
-		b, _ := io.ReadAll(resp.Body)
-		var ip, loc string
-		for _, ln := range strings.Split(string(b), "\n") {
-			if strings.HasPrefix(ln, "ip=") {
-				ip = strings.TrimPrefix(ln, "ip=")
-			}
-			if strings.HasPrefix(ln, "loc=") {
-				loc = strings.TrimPrefix(ln, "loc=")
-			}
-		}
-		if ip != "" {
-			a.mu.Lock()
-			a.egress = ip + " · " + loc
-			needOrg := ip != a.egressOrgIP
-			a.mu.Unlock()
-			if needOrg {
-				if org, ok := fetchEgressOrg(cl, ip); ok {
-					a.mu.Lock()
-					a.egressOrg, a.egressOrgIP = org, ip
-					a.mu.Unlock()
-				}
-			}
-		}
-	})
-}
-
 // fetchEgressOrg resolves the organization (ISP / AS name)
 // behind the egress IP — the dashboard status card's 组织
 // field, as in FlClash. Keyed by IP: callers only invoke it
 // when the egress IP changes, so the cadence stays at one
 // lookup per node switch.
 func fetchEgressOrg(cl *http.Client, wantIP string) (string, bool) {
-	resp, err := cl.Get("https://ipinfo.io/json")
+	return fetchEgressOrgContext(context.Background(), cl, "https://ipinfo.io/json", wantIP)
+}
+
+func fetchEgressOrgContext(ctx context.Context, cl *http.Client, endpoint, wantIP string) (string, bool) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return "", false
+	}
+	resp, err := cl.Do(req)
 	if err != nil {
 		return "", false
 	}
