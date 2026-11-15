@@ -13,7 +13,7 @@
 
 ClashGo 是使用 **Go、[MyGo](https://github.com/egoist/mygo)、[Onevra](https://github.com/oneo-me/onevra) 和 [mihomo](https://github.com/MetaCubeX/mihomo)** 构建的 Linux 原生桌面代理客户端。不使用 Electron 外壳或内嵌 WebView，mihomo 以受管理的子进程运行。
 
-**当前状态：**候选发布版，已在 CachyOS x86-64 / Hyprland 上验证；其他 Linux 桌面和架构仍需独立验证。本项目是独立第三方客户端，与 MetaCubeX、Shadowrocket 无隶属关系。版本徽标对应候选标签，不代表已经有线上 Release 或打包下载。
+**当前状态**：候选发布版，已在 CachyOS x86-64 / Hyprland 上验证；其他 Linux 桌面和架构仍需独立验证。本项目是独立第三方客户端，与 MetaCubeX、Shadowrocket 无隶属关系。版本徽标对应候选标签，不代表已经有线上 Release 或打包下载。
 
 ## 配置与订阅各司其职
 
