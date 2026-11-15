@@ -160,8 +160,11 @@ func pathRow(c *ui.Context, label, value string) {
 }
 
 func (a *App) restoreProxy() {
-	a.proxyManager().Disarm()
-	a.setMsg("系统代理已恢复为接管前设置")
+	if err := a.proxyManager().Disarm(); err != nil {
+		a.setMsg("恢复系统代理失败：%v", err)
+		return
+	}
+	a.setMsg("系统代理已释放（第三方设置保持不变）")
 	a.refreshTray()
 }
 

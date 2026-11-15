@@ -351,12 +351,17 @@ func (a *App) startCore() {
 	if a.quitting.Load() {
 		return
 	}
+	var captureErr error
 	if a.settings().TUNEnabled {
-		a.proxyManager().Neutralize()
+		captureErr = a.proxyManager().Neutralize()
 	} else if a.settings().ArmProxyOnStart && !a.proxyManager().Armed() {
-		a.proxyManager().Arm()
+		captureErr = a.proxyManager().Arm()
 	}
-	a.setMsg("")
+	if captureErr != nil {
+		a.setMsg("核心就绪，但系统代理设置失败：%v", captureErr)
+	} else {
+		a.setMsg("")
+	}
 	a.refreshProxies()
 	a.refreshMode()
 	a.refreshEgress()
@@ -548,6 +553,15 @@ func (a *App) pollTick(ticks *int) {
 		a.coreErr = "核心进程已退出"
 		a.mu.Unlock()
 		ok = false
+		if err := a.proxyManager().Disarm(); err != nil {
+			a.setMsg("核心退出后恢复代理失败：%v", err)
+		}
+	}
+	// Ownership checks also run while the native window is hidden.
+	if ok {
+		if err := a.proxyManager().Reassert(); err != nil {
+			a.setMsg("代理所有权检查失败：%v", err)
+		}
 	}
 	if open {
 		a.refreshOverviewFacts()
@@ -614,10 +628,6 @@ func (a *App) pollTick(ticks *int) {
 	}
 	(*ticks)++
 	if *ticks%15 == 0 {
-		// Capture watchdog: while we own the system proxy,
-		// take it back if another app grabbed it (the launch
-		// grab cuts both ways — see sysproxy.Reassert).
-		a.proxyManager().Reassert()
 		a.refreshEgress()
 		a.refreshProxies()
 		a.refreshMode()
@@ -1440,8 +1450,12 @@ func (a *App) shutdown() {
 	if a.work != nil {
 		a.work.Wait()
 	}
-	a.proxyManager().Disarm()
-	a.proxyManager().EndSession()
+	if err := a.proxyManager().Disarm(); err != nil {
+		a.setMsg("退出时恢复系统代理失败：%v", err)
+	}
+	if err := a.proxyManager().EndSession(); err != nil {
+		a.setMsg("代理恢复记录保留：%v", err)
+	}
 	a.sup.Stop()
 	if a.tray != nil {
 		a.tray.Destroy()

@@ -1,21 +1,21 @@
-// Package sysproxy owns the GNOME system proxy settings. It implements
-// the arm/restore/self-heal state machine proven in the Phase 0 spike:
-//
-//   - Arm records the previous settings, then points http/https/socks
-//     at our core. Only ever called after the core is verified healthy.
-//   - A graceful quit restores the recorded settings.
-//   - If the process dies uncleanly (kill -9, crash), the next start
-//     finds the state file with clean=false and the live settings still
-//     pointing at our (dead) port, and heals them back.
+// Package sysproxy restores desktop settings only while their full fingerprint
+// still matches the values this application wrote. It never fights a new owner.
 package sysproxy
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"sync"
+	"time"
+
+	"github.com/carrotciallo/clashgo/internal/config"
 )
 
 type snapshot struct {
@@ -27,220 +27,269 @@ type snapshot struct {
 	SocksHost string `json:"socksHost"`
 	SocksPort int    `json:"socksPort"`
 }
-
 type state struct {
-	Armed bool     `json:"armed"`
-	Clean bool     `json:"clean"`
-	Prev  snapshot `json:"prev"`
-	// Parked: TUN mode owns the settings — GNOME is set to "none" so
-	// proxy-aware apps go direct and TUN captures them. Prev still
-	// holds the pre-ClashGo snapshot for exit/heal restore. Armed and
-	// Parked are mutually exclusive by construction.
-	Parked bool `json:"parked,omitempty"`
+	Armed    bool      `json:"armed"`
+	Clean    bool      `json:"clean"`
+	Prev     snapshot  `json:"prev"`
+	Parked   bool      `json:"parked,omitempty"`
+	Expected *snapshot `json:"expected,omitempty"`
 }
-
+type backend interface {
+	Read() (snapshot, error)
+	Write(snapshot) error
+}
 type Manager struct {
+	mu        sync.Mutex
 	StatePath string
 	Port      int
+	backend   backend
+	lastErr   error
 }
 
 func New(stateDir string, port int) *Manager {
-	return &Manager{StatePath: filepath.Join(stateDir, "proxy-state.json"), Port: port}
+	return &Manager{StatePath: filepath.Join(stateDir, "proxy-state.json"), Port: port, backend: desktop{}}
 }
 
-func gget(schema, key string) string {
-	out, err := exec.Command("gsettings", "get", schema, key).Output()
+type desktop struct{}
+
+func gsettings(args ...string) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	b, err := exec.CommandContext(ctx, "gsettings", args...).Output()
 	if err != nil {
-		return ""
+		return "", fmt.Errorf("gsettings %s failed: %w", args[0], err)
 	}
-	return strings.TrimSpace(string(out))
+	return strings.TrimSpace(string(b)), nil
 }
-
-func gset(schema, key, val string) {
-	_ = exec.Command("gsettings", "set", schema, key, val).Run()
-}
-
-func unq(s string) string { return strings.Trim(s, "'") }
-
-func current() snapshot {
+func (desktop) Read() (snapshot, error) {
 	var s snapshot
-	s.Mode = unq(gget("org.gnome.system.proxy", "mode"))
-	s.HTTPHost = unq(gget("org.gnome.system.proxy.http", "host"))
-	fmt.Sscan(gget("org.gnome.system.proxy.http", "port"), &s.HTTPPort)
-	s.HTTPSHost = unq(gget("org.gnome.system.proxy.https", "host"))
-	fmt.Sscan(gget("org.gnome.system.proxy.https", "port"), &s.HTTPSPort)
-	s.SocksHost = unq(gget("org.gnome.system.proxy.socks", "host"))
-	fmt.Sscan(gget("org.gnome.system.proxy.socks", "port"), &s.SocksPort)
-	return s
+	fields := []struct {
+		schema, key string
+		target      *string
+	}{
+		{"org.gnome.system.proxy", "mode", &s.Mode},
+		{"org.gnome.system.proxy.http", "host", &s.HTTPHost},
+		{"org.gnome.system.proxy.https", "host", &s.HTTPSHost},
+		{"org.gnome.system.proxy.socks", "host", &s.SocksHost},
+	}
+	for _, f := range fields {
+		v, err := gsettings("get", f.schema, f.key)
+		if err != nil {
+			return s, err
+		}
+		*f.target = strings.Trim(v, "'\"")
+	}
+	for _, f := range []struct {
+		schema string
+		target *int
+	}{{"http", &s.HTTPPort}, {"https", &s.HTTPSPort}, {"socks", &s.SocksPort}} {
+		v, err := gsettings("get", "org.gnome.system.proxy."+f.schema, "port")
+		if err != nil {
+			return s, err
+		}
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			return s, err
+		}
+		*f.target = n
+	}
+	return s, nil
 }
-
-func restore(s snapshot) {
-	gset("org.gnome.system.proxy.http", "host", s.HTTPHost)
-	gset("org.gnome.system.proxy.http", "port", fmt.Sprint(s.HTTPPort))
-	gset("org.gnome.system.proxy.https", "host", s.HTTPSHost)
-	gset("org.gnome.system.proxy.https", "port", fmt.Sprint(s.HTTPSPort))
-	gset("org.gnome.system.proxy.socks", "host", s.SocksHost)
-	gset("org.gnome.system.proxy.socks", "port", fmt.Sprint(s.SocksPort))
-	gset("org.gnome.system.proxy", "mode", s.Mode)
+func (desktop) Write(s snapshot) error {
+	// Mode last: a fresh arm cannot become active until all endpoints exist.
+	for _, f := range []struct{ schema, key, val string }{
+		{"http", "host", strconv.Quote(s.HTTPHost)}, {"http", "port", strconv.Itoa(s.HTTPPort)},
+		{"https", "host", strconv.Quote(s.HTTPSHost)}, {"https", "port", strconv.Itoa(s.HTTPSPort)},
+		{"socks", "host", strconv.Quote(s.SocksHost)}, {"socks", "port", strconv.Itoa(s.SocksPort)},
+	} {
+		if _, err := gsettings("set", "org.gnome.system.proxy."+f.schema, f.key, f.val); err != nil {
+			return err
+		}
+	}
+	_, err := gsettings("set", "org.gnome.system.proxy", "mode", strconv.Quote(s.Mode))
+	return err
 }
-
-func (m *Manager) load() (state, bool) {
+func (m *Manager) load() (state, error) {
 	b, err := os.ReadFile(m.StatePath)
+	if errors.Is(err, os.ErrNotExist) {
+		return state{}, nil
+	}
 	if err != nil {
-		return state{}, false
+		return state{}, err
 	}
 	var st state
-	if json.Unmarshal(b, &st) != nil {
-		return state{}, false
+	err = json.Unmarshal(b, &st)
+	return st, err
+}
+func (m *Manager) save(st state) error {
+	b, err := json.Marshal(st)
+	if err != nil {
+		return err
 	}
-	return st, true
+	return config.WriteFileAtomic(m.StatePath, b, 0600)
 }
-
-func (m *Manager) save(st state) {
-	b, _ := json.Marshal(st)
-	_ = os.WriteFile(m.StatePath, b, 0o600)
+func (m *Manager) armSnapshot() snapshot {
+	return snapshot{Mode: "manual", HTTPHost: "127.0.0.1", HTTPPort: m.Port, HTTPSHost: "127.0.0.1", HTTPSPort: m.Port, SocksHost: "127.0.0.1", SocksPort: m.Port}
 }
-
-// HealIfNeeded repairs a stale arm left by an unclean exit. Call before
-// anything else touches the proxy. Reports whether it healed.
-func (m *Manager) HealIfNeeded() bool {
-	st, ok := m.load()
-	if !ok || st.Clean {
+func (m *Manager) owns(st state, cur snapshot) bool {
+	if !st.Armed && !st.Parked {
 		return false
 	}
-	cur := current()
-	if st.Armed && cur.HTTPPort == m.Port {
-		restore(st.Prev)
-		st.Armed = false
-		st.Clean = true
-		m.save(st)
-		return true
+	if st.Expected != nil {
+		return cur == *st.Expected
 	}
-	if st.Parked && cur.Mode == "none" {
-		restore(st.Prev)
-		st.Parked = false
-		st.Clean = true
-		m.save(st)
-		return true
-	}
-	return false
+	// Legacy parked records have no full fingerprint, so cannot prove ownership.
+	return st.Armed && cur == m.armSnapshot()
 }
-
-// BeginSession marks the state unclean so a hard kill is detectable.
-func (m *Manager) BeginSession() {
-	if st, ok := m.load(); ok {
-		st.Clean = false
-		m.save(st)
-	}
-}
-
-// applyArm writes the live settings that point the system proxy at
-// our core. The caller owns the state file.
-func (m *Manager) applyArm() {
-	gset("org.gnome.system.proxy.http", "host", "127.0.0.1")
-	gset("org.gnome.system.proxy.http", "port", fmt.Sprint(m.Port))
-	gset("org.gnome.system.proxy.https", "host", "127.0.0.1")
-	gset("org.gnome.system.proxy.https", "port", fmt.Sprint(m.Port))
-	gset("org.gnome.system.proxy.socks", "host", "127.0.0.1")
-	gset("org.gnome.system.proxy.socks", "port", fmt.Sprint(m.Port))
-	gset("org.gnome.system.proxy", "mode", "manual")
-}
-
-// Arm points the system proxy at our core, recording previous values.
-func (m *Manager) Arm() {
-	if st, ok := m.load(); ok && st.Armed {
-		if current().HTTPPort == m.Port {
-			return // already armed by us; keep the original prev
-		}
-		// Stale flag (2026-11-11, found live): a previous session died
-		// mid-shutdown after the live settings had been restored, so
-		// the record claims we own a proxy we do not. Re-assert the
-		// arm against the recorded prev instead of stranding the
-		// desktop on whatever the live values happen to be.
-		m.applyArm()
-		return
-	}
-	prev := current()
-	if st, ok := m.load(); ok && st.Parked {
-		prev = st.Prev // TUN owned the settings; keep the original prev
-	}
-	st := state{Armed: true, Clean: false, Prev: prev}
-	m.save(st)
-	m.applyArm()
-}
-
-// Neutralize puts GNOME into "none" mode for TUN capture: apps that
-// read the system proxy go direct, and TUN catches their traffic. The
-// recorded prev is kept untouched so Disarm/EndSession and the healer
-// can still restore the pre-ClashGo settings. Mutually exclusive with
-// Arm — the caller picks exactly one capture mode.
-func (m *Manager) Neutralize() {
-	if st, ok := m.load(); ok && st.Parked {
-		if current().Mode == "none" {
-			return // already parked by us
-		}
-		// Stale flag, same 2026-11-11 incident as in Arm: the record
-		// says parked but the live settings were restored underneath
-		// us (they pointed at a dead port while TUN owned traffic).
-		// Re-assert the park; the recorded prev stays authoritative.
-		gset("org.gnome.system.proxy", "mode", "none")
-		return
-	}
-	prev := current()
-	if st, ok := m.load(); ok && st.Armed {
-		prev = st.Prev // keep the original prev, not our own armed values
-	}
-	m.save(state{Parked: true, Clean: false, Prev: prev})
-	gset("org.gnome.system.proxy", "mode", "none")
-}
-
-// Reassert is the watchdog half of the launch-time grab: while
-// ClashGo owns the capture, another proxy app starting up (the
-// FlClash behavior that prompted this, 2026-11-11) — or anything
-// else — can rewrite the GNOME settings under us. Reassert checks
-// the live settings against the recorded ownership and writes ours
-// back when they no longer match. The recorded prev is never
-// touched: the thief's values are not the desktop's original
-// settings, ours still are. A no-op when we own nothing.
-func (m *Manager) Reassert() {
-	st, ok := m.load()
-	if !ok {
-		return
-	}
-	if st.Armed {
-		cur := current()
-		if cur.Mode != "manual" || cur.HTTPPort != m.Port || cur.HTTPSPort != m.Port || cur.SocksPort != m.Port {
-			m.applyArm()
-		}
-	} else if st.Parked {
-		if current().Mode != "none" {
-			gset("org.gnome.system.proxy", "mode", "none")
-		}
-	}
-}
-
-// Disarm restores the recorded settings if we own them (armed or
-// parked for TUN).
-func (m *Manager) Disarm() {
-	st, ok := m.load()
-	if !ok || (!st.Armed && !st.Parked) {
-		return
-	}
-	restore(st.Prev)
+func relinquish(st state) state {
 	st.Armed = false
 	st.Parked = false
 	st.Clean = true
-	m.save(st)
+	st.Expected = nil
+	return st
 }
 
-// Armed reports whether the live settings currently point at our port.
+func (m *Manager) HealIfNeeded() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	st, err := m.load()
+	if err != nil {
+		m.lastErr = err
+		return false
+	}
+	if st.Clean {
+		return false
+	}
+	cur, err := m.backend.Read()
+	if err != nil {
+		m.lastErr = err
+		return false
+	}
+	healed := m.owns(st, cur)
+	if healed {
+		if err = m.backend.Write(st.Prev); err != nil {
+			m.lastErr = err
+			return false
+		}
+	}
+	m.lastErr = m.save(relinquish(st))
+	return healed && m.lastErr == nil
+}
+func (m *Manager) BeginSession() error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	st, err := m.load()
+	if err != nil {
+		return err
+	}
+	st.Clean = false
+	return m.save(st)
+}
+func (m *Manager) Arm() error        { return m.acquire(false) }
+func (m *Manager) Neutralize() error { return m.acquire(true) }
+func (m *Manager) acquire(park bool) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	st, err := m.load()
+	if err != nil {
+		return err
+	}
+	cur, err := m.backend.Read()
+	if err != nil {
+		return err
+	}
+	prev := cur
+	if m.owns(st, cur) {
+		prev = st.Prev
+	}
+	target := m.armSnapshot()
+	if park {
+		target = cur
+		target.Mode = "none"
+	}
+	next := state{Armed: !park, Parked: park, Prev: prev, Expected: &target}
+	// Write-ahead ownership journal. A mismatching partial write is never healed
+	// over another application's settings; callers receive the backend error.
+	if err = m.save(next); err != nil {
+		return err
+	}
+	if err = m.backend.Write(target); err != nil {
+		return err
+	}
+	check, err := m.backend.Read()
+	if err != nil {
+		return err
+	}
+	if check != target {
+		return fmt.Errorf("system proxy changed during acquisition")
+	}
+	return nil
+}
+
+// Reassert now yields on interference instead of stealing the desktop back.
+// Kept as a compatibility name for the periodic ownership check.
+func (m *Manager) Reassert() error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	st, err := m.load()
+	if err != nil {
+		return err
+	}
+	if !st.Armed && !st.Parked {
+		return nil
+	}
+	cur, err := m.backend.Read()
+	if err != nil {
+		return err
+	}
+	if !m.owns(st, cur) {
+		return m.save(relinquish(st))
+	}
+	return nil
+}
+func (m *Manager) Disarm() error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	st, err := m.load()
+	if err != nil {
+		return err
+	}
+	if !st.Armed && !st.Parked {
+		return nil
+	}
+	cur, err := m.backend.Read()
+	if err != nil {
+		return err
+	}
+	if m.owns(st, cur) {
+		if err = m.backend.Write(st.Prev); err != nil {
+			return err
+		}
+	}
+	return m.save(relinquish(st))
+}
 func (m *Manager) Armed() bool {
-	return current().HTTPPort == m.Port
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	st, err := m.load()
+	if err != nil || !st.Armed {
+		return false
+	}
+	cur, err := m.backend.Read()
+	return err == nil && m.owns(st, cur)
 }
-
-// EndSession records a clean exit (call on graceful quit, after Disarm).
-func (m *Manager) EndSession() {
-	st, _ := m.load()
+func (m *Manager) EndSession() error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	st, err := m.load()
+	if err != nil {
+		return err
+	}
+	// Do not erase the recovery journal after a failed Disarm.
+	if st.Armed || st.Parked {
+		return fmt.Errorf("system proxy ownership not released")
+	}
 	st.Clean = true
-	m.save(st)
+	return m.save(st)
 }
+func (m *Manager) LastError() error { m.mu.Lock(); defer m.mu.Unlock(); return m.lastErr }
