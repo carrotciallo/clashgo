@@ -227,3 +227,5 @@ UI 明确问题：
 - 代码修复：启动前识别会屏蔽网络文件能力的NoNewPrivs环境并明确报错，不自动提权或规避限制；启动、配置激活、回滚及运行配置重载均在宣称成功前核验真实TUN网卡。控制器enable标志不是成功证据，必须有命名网卡、UP、非回环、MTU1500；检查受取消/超时约束，失败不继续接管。
 - 撤销 `c466353` 对TUN门槛的错误放宽。保留手工代理模式的端口检查；选中TUN时额外检查实际网卡，恢复采样模式及核心PID隔离。概览不再凭设置显示接管中，失败显示“虚拟网卡未就绪”，托盘灰色并标注“TUN 未就绪”。
 - 钉子测试先改：明确“/version正常、代理端口开放、TUN enable=true、但网卡不存在”必须失败；覆盖NoNewPrivs及能力组合、设备缺失/未UP/MTU错误/回环、取消与超时。保留系统代理所有权与既有测试基线。全量离线测试、race、vet通过；不在生产制造TUN故障进行测试。后续部署必须由正常桌面或用户服务启动，不能直接继承本执行环境。
+- 修复提交 `a8a675e`；`CLASHGO_TEST_MIHOMO=/usr/bin/mihomo GOPROXY=off go test -race ./... -count=1`、完整普通测试、vet、六个修改文件的主动LSP检查通过。安装二进制 `/tmp/clashgo-delivery/clashgo-tun-fix` 与 `/home/user/.local/bin/clashgo` 字节一致，SHA256 `f5b49ab45d79c9fa0e0db82718245119db5c29c7fcdb705347858ce1e6bf86b2`。
+- 安装后应用PID<pid>由瞬态用户服务管理，Meta UP/MTU1500、控制器无凭据401；TUN访问Google204、GitHub200。D-Bus导出的托盘图像与仓库彩色猫PNG哈希一致，提示“代理服务可用”。未读取生产密钥或直接编辑主配置/注册表；旧二进制备份 `/home/user/.local/state/binary-backups/clashgo-before-tun-fix-20261116-0555`。
