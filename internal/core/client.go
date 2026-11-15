@@ -275,13 +275,26 @@ func (cn Connection) Exit() string {
 	return ""
 }
 
+type ConnectionSnapshot struct {
+	UploadTotal, DownloadTotal int64
+	Connections                []Connection
+}
+
 func (c *Client) Connections() ([]Connection, error) {
+	snapshot, err := c.ConnectionsSnapshot()
+	return snapshot.Connections, err
+}
+
+// ConnectionsSnapshot obtains counters and records at the same instant.
+func (c *Client) ConnectionsSnapshot() (ConnectionSnapshot, error) {
 	b, err := c.do(http.MethodGet, "/connections", nil)
 	if err != nil {
-		return nil, err
+		return ConnectionSnapshot{}, err
 	}
 	var resp struct {
-		Connections []struct {
+		UploadTotal   int64 `json:"uploadTotal"`
+		DownloadTotal int64 `json:"downloadTotal"`
+		Connections   []struct {
 			ID       string `json:"id"`
 			Metadata struct {
 				Host            string `json:"host"`
@@ -298,7 +311,7 @@ func (c *Client) Connections() ([]Connection, error) {
 		} `json:"connections"`
 	}
 	if err := json.Unmarshal(b, &resp); err != nil {
-		return nil, err
+		return ConnectionSnapshot{}, err
 	}
 	out := make([]Connection, 0, len(resp.Connections))
 	for _, cn := range resp.Connections {
@@ -315,7 +328,7 @@ func (c *Client) Connections() ([]Connection, error) {
 			Rule: cn.Rule, Upload: cn.Upload, Download: cn.Download, Start: cn.Start,
 		})
 	}
-	return out, nil
+	return ConnectionSnapshot{resp.UploadTotal, resp.DownloadTotal, out}, nil
 }
 
 // CloseConnection terminates one live connection by ID.

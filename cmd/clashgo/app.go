@@ -76,6 +76,7 @@ type App struct {
 	gateway   string
 	// session peak traffic rates for the overview cards.
 	maxUpRate, maxDownRate int64
+	overview               overviewFacts
 	// recent holds connections that closed since launch, newest
 	// first (the requests page's recent tab); prevConnIDs is the
 	// previous poll's live set, diffed against the current one.
@@ -513,10 +514,22 @@ func (a *App) pollLoop() {
 		a.mu.Lock()
 		open, ok := a.windowOpen, a.coreOK
 		a.mu.Unlock()
+		if ok && !a.sup.Running() {
+			a.mu.Lock()
+			a.coreOK = false
+			a.coreErr = "核心进程已退出"
+			a.mu.Unlock()
+			ok = false
+		}
+		if open {
+			a.refreshOverviewFacts()
+		}
 		if !open || !ok {
 			continue
 		}
-		if up, down, err := a.cli.TrafficTotals(); err == nil {
+		sample, sampleErr := a.cli.ConnectionsSnapshot()
+		if sampleErr == nil {
+			up, down := sample.UploadTotal, sample.DownloadTotal
 			now := time.Now()
 			a.mu.Lock()
 			if !a.prevSample.IsZero() {
@@ -541,7 +554,8 @@ func (a *App) pollLoop() {
 			a.up, a.down = up, down
 			a.mu.Unlock()
 		}
-		if conns, err := a.cli.Connections(); err == nil {
+		if sampleErr == nil {
+			conns := sample.Connections
 			// Drop the core's own plumbing connections (dialer
 			// tunnels have no user-meaningful exit).
 			kept := conns[:0]

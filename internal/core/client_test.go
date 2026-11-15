@@ -63,6 +63,19 @@ func TestClientNullProxiesAndIPv6(t *testing.T) {
 	}
 }
 
+func TestConnectionSnapshotSingleRequest(t *testing.T) {
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		_, _ = w.Write([]byte(`{"uploadTotal":12,"downloadTotal":34,"connections":[{"id":"one"}]}`))
+	}))
+	defer server.Close()
+	snapshot, err := NewClient(server.URL, "").ConnectionsSnapshot()
+	if err != nil || snapshot.UploadTotal != 12 || snapshot.DownloadTotal != 34 || len(snapshot.Connections) != 1 || calls != 1 {
+		t.Fatalf("inconsistent snapshot: %+v, calls=%d, err=%v", snapshot, calls, err)
+	}
+}
+
 func TestClientBoundsAndMarshalFailure(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte(strings.Repeat("x", (16<<20)+1))) }))
 	defer server.Close()

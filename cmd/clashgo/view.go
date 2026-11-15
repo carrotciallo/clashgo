@@ -8,7 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/carrotciallo/clashgo/internal/config"
 	"github.com/carrotciallo/clashgo/internal/subs"
 	"github.com/egoist/mygo/ui"
 	ov "github.com/oneo-me/onevra/source/components"
@@ -432,9 +431,10 @@ func (a *App) pageOverview(c *ui.Context) {
 	upPeak, downPeak := a.maxUpRate, a.maxDownRate
 	dnsTotal := a.dnsTotal
 	egressOrg := a.egressOrg
+	facts := a.overview
 	a.mu.Unlock()
 	chain := a.egressChain()
-	appMem, coreMem := a.memUsage()
+	appMem, coreMem := facts.AppMemory, facts.CoreMemory
 
 	// ---- status row: three separate cards — status / upload /
 	// download — stretched to one height. ----
@@ -575,17 +575,14 @@ func (a *App) pageOverview(c *ui.Context) {
 			sub, tone := "未接管", colFaint
 			if a.set.TUNEnabled {
 				sub, tone = "虚拟网卡接管中", colOK
-			} else if a.px.Armed() {
+			} else if facts.CaptureOwned {
 				sub, tone = fmt.Sprintf("系统代理 127.0.0.1:%d", a.set.MixedPort), colOK
 			}
 			txt(c, sub, fsMicro, false, tone).SingleLine()
 		})
 		miniCard(c, lucide.ScrollText(), "配置", func() {
 			txt(c, profileDisplayName(a.set.ActiveProfile), fsValue, true, colText).SingleLine()
-			rules := "—"
-			if master, err := a.store.LoadMaster(); err == nil {
-				rules = fmt.Sprintf("%d 条规则", len(config.ExtractRules(master)))
-			}
+			rules := fmt.Sprintf("%d 条规则", facts.RuleCount)
 			caption(c, fmt.Sprintf("%d 个订阅 · %s", len(a.reg.Subs), rules))
 		}, func() {
 			if u := firstQuotaSub(a.reg.Subs); u != nil {
