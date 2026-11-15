@@ -120,6 +120,7 @@ func (a *App) recentTable(c *ui.Context, recent []recentConn, limit int) {
 		txt(c, "下载", fsMicro, true, colFaint).Width(84).TextAlign(ui.End)
 		txt(c, "上传", fsMicro, true, colFaint).Width(84).TextAlign(ui.End)
 		txt(c, "流量", fsMicro, true, colFaint).Width(84).TextAlign(ui.End)
+		ui.Box(c).Width(31)
 	})
 	for i, rc := range recent {
 		if limit > 0 && i >= limit {
@@ -162,9 +163,7 @@ func connHeader(c *ui.Context, closable bool) {
 		txt(c, "下载", fsMicro, true, colFaint).Width(84).TextAlign(ui.End)
 		txt(c, "上传", fsMicro, true, colFaint).Width(84).TextAlign(ui.End)
 		txt(c, "流量", fsMicro, true, colFaint).Width(84).TextAlign(ui.End)
-		if closable {
-			ui.Box(c).Width(31)
-		}
+		ui.Box(c).Width(31)
 	})
 }
 

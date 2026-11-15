@@ -283,23 +283,34 @@ func (a *App) rulesList(c *ui.Context, master string, editable bool) {
 		}
 	})
 	listCard(c, func() {
+		ui.Row(c).FillWidth().Padding(8, 16).Gap(10).Background(colInset).Children(func() {
+			txt(c, "#", fsMicro, true, colFaint).Width(26)
+			txt(c, "类型", fsMicro, true, colFaint).Width(110)
+			txt(c, "匹配项", fsMicro, true, colFaint).Grow(1)
+			txt(c, "策略", fsMicro, true, colFaint).Width(120)
+			if editable {
+				ui.Box(c).Width(31)
+			}
+		})
 		for i, r := range rules {
 			i, r := i, r
 			if i > 0 {
 				hairline(c)
 			}
 			typ, value, policy := ruleParts(r)
-			ui.Row(c).FillWidth().Padding(10, 16).Gap(10).AlignItems(ui.Center).Children(func() {
+			row := ui.Row(c).FillWidth().Padding(10, 16).Gap(10).AlignItems(ui.Center)
+			if i%2 == 1 {
+				row.Background(colZebra)
+			}
+			row.Children(func() {
 				num(c, fmt.Sprintf("%d", i+1), fsMicro, false, colFaint).Width(26)
-				tag(c, ruleTypeLabel(typ), colMuted)
+				txt(c, ruleTypeLabel(typ), fsSmall, false, colMuted).Width(110).SingleLine()
 				if value != "" {
 					txt(c, value, fsSmall, false, colText).Grow(1).SingleLine()
 				} else {
 					ui.Box(c).Grow(1)
 				}
-				if policy != "" {
-					txt(c, policy, fsSmall, true, policyColor(policy))
-				}
+				txt(c, policy, fsSmall, true, policyColor(policy)).Width(120).SingleLine()
 				if editable {
 					if iconButton(c, "删除规则 "+r, lucide.Trash()).Clicked() {
 						a.deleteRule(i)
