@@ -1,80 +1,128 @@
-# ClashGo
+<p align="center">
+  <img src="assets/icon.svg" alt="ClashGo cat icon" width="112" height="112">
+</p>
+<h1 align="center">ClashGo</h1>
+<p align="center">Your configuration. Your rules. Subscriptions are just node pools.</p>
+<p align="center">
+  <img src="https://img.shields.io/badge/release-v0.1.0--rc.1-CAD1FA" alt="Release candidate v0.1.0-rc.1">
+  <img src="https://img.shields.io/badge/platform-Linux-34364B" alt="Linux">
+  <img src="https://img.shields.io/badge/Go-1.27.3-00ADD8" alt="Go 1.27.3">
+  <img src="https://img.shields.io/badge/license-GPL--3.0-blue" alt="GPL-3.0">
+</p>
+<p align="center"><strong>English</strong> · <a href="README.zh-CN.md">简体中文</a></p>
 
-**A lightweight Linux desktop client for the [mihomo](https://github.com/MetaCubeX/mihomo) core — built with Go + MyGo.**
+ClashGo is a native Linux desktop proxy client built with **Go, [MyGo](https://github.com/egoist/mygo), [Onevra](https://github.com/oneo-me/onevra), and [mihomo](https://github.com/MetaCubeX/mihomo)**. It uses a native UI, not an Electron shell or embedded webview. The core runs as a supervised sidecar process.
 
-Subscriptions are just node pools. Your config, your rules.
+**Status:** release candidate, tested on CachyOS x86-64 with Hyprland. Other Linux desktops and architectures need independent validation. This is an independent third-party project, not affiliated with MetaCubeX or Shadowrocket. The badge names the candidate tag; it does not promise that a hosted release or packaged download is already available.
 
-ClashGo follows the "rocket-style" model: the master configuration is a file
-*you* own, subscriptions only feed nodes into it via `proxy-providers`, and
-your rules and policy groups live in the master config — switching or losing a
-subscription can never silently take your rules with it.
+## A different configuration model
 
-> Status: **Phase 0** — project skeleton and desktop spike validation.
-> Not yet usable. ClashGo is an independent third-party client and is not
-> affiliated with MetaCubeX.
+- **You own `master.yaml` and your named profiles.** Subscription updates do not replace your rule configuration.
+- **Subscriptions supply nodes, not policies.** Subscription `proxy-groups` are discarded at ingestion; supported leaf selections are flattened into ordinary nodes while required dialer chains are retained.
+- The rendered configuration exposes the single application-owned selector **`节点选择`**. Subscription policy-group cards are intentionally absent.
+- Managed pools are validated and rendered as local file providers. Invalid downloads preserve the previous valid pool.
+- Runtime-only settings are applied during rendering: mixed/controller ports and authentication, TUN MTU **1500**, IPv6 disabled when unspecified, a DNS listener when TUN is enabled, and direct rules for subscription server domains. Explicit master IPv6 settings are respected.
 
-## Why
+ClashGo is not a drop-in host for arbitrary subscription group hierarchies or another client's merge/script pipeline.
 
-Mainstream Clash clients ship the airport's whole bundle (nodes + groups +
-rules) as one profile, so user rules bound to a profile die quietly when the
-profile changes — and the clients themselves are heavy (hundreds of MB of
-resident memory for a tray icon and a node switcher). ClashGo is the opposite
-trade: one small native binary, file-based state you can inspect and back up,
-and a config pipeline that validates (`mihomo -t`), swaps atomically and
-rolls back automatically, so a bad subscription refresh can never break your
-network.
+## Features
 
-## Tech stack
+- Native dashboard, light/dark themes, node selection and latency tests, connection/request views, rules, profiles, DNS observations, and core logs.
+- Separate cat application and tray artwork. The tray is colored when capture readiness checks pass and gray otherwise; this is **not** a guarantee that every remote site or node is reachable.
+- System-proxy integration through `gsettings`, with ownership fingerprints to avoid overwriting another application's changes.
+- TUN mode with launch-permission checks and verification of the applied configuration, listener, and actual network interface—not just `/version` availability.
+- Validated configuration edits and profile/settings changes, staged publication, and rollback on ordinary activation failures.
+- One instance per configuration directory, managed background tasks, stale-result rejection, and cancellable diagnostic requests.
+- Manual subscription refresh plus a 24-hour scheduler, duplicate-request coalescing, and exponential failure backoff.
+- Immediate capture-status publication at startup; outbound IP/organization lookup does not hold the core-operation lock. Fixed-name startup timing milestones help diagnose delays without logging credentials.
 
-| Layer | Choice |
+## Build and run
+
+### Requirements
+
+- **Go 1.27.3** or a compatible newer toolchain; versions are pinned in [`go.mod`](go.mod).
+- A Linux graphical session with **GTK 3**, a session D-Bus, and **libayatana-appindicator3** for the tray. Package names vary by distribution. A tray host is required to display the icon.
+- **mihomo**, installed separately and available on `PATH` or selected in settings. The current integration suite was validated against **v1.19.33**. The core and geodata are not bundled.
+- Network access on first dependency/core-data download, or an already populated local cache. `GOPROXY=off` does not download missing dependencies.
+
+The current UI uses MyGo **v0.9.1** and Onevra **v0.2026.18**. Native mode does not require WebKitGTK or Node.js. SVG-to-PNG regeneration additionally uses `rsvg-convert`; the generated PNGs are already tracked.
+
+```bash
+# From the repository root; fetch dependencies once if needed.
+go mod download
+
+# Reproducible dependency selection, using the populated module cache.
+GOPROXY=off go build -o /tmp/clashgo ./cmd/clashgo
+
+# Run in your normal desktop session, not as root.
+/tmp/clashgo
+```
+
+Building into `/tmp` avoids adding a binary to the source tree. To install manually, **quit the existing application first**, preserve a rollback copy if applicable, then:
+
+```bash
+install -Dm755 /tmp/clashgo "$HOME/.local/bin/clashgo"
+install -Dm644 assets/icon.svg \
+  "$HOME/.local/share/icons/hicolor/scalable/apps/clashgo.svg"
+"$HOME/.local/bin/clashgo"
+```
+
+This installs the executable and icon, not a desktop entry, system service, core, or privileged helper. There is no bundled installer or automatic updater in this candidate.
+
+### First use and routing
+
+1. Start ClashGo and select the mihomo executable if it cannot be discovered.
+2. Add a subscription/node pool or import local nodes. Configure your own rules in the profile editor.
+3. Select a node and choose system-proxy or TUN capture as appropriate.
+4. Check actual connectivity. A listening port or successful controller request alone is not enough.
+
+Default endpoints are **`127.0.0.1:7897`** for HTTP/SOCKS and **`127.0.0.1:9097`** for the authenticated controller. The application generates the controller secret; do not publish settings, subscription URLs, or rendered runtime files.
+
+System proxy settings are only honored by applications that use them. Other software may need an explicit proxy, for example:
+
+```bash
+https_proxy=http://127.0.0.1:7897 curl --max-time 15 https://example.com/
+```
+
+TUN needs administrator-approved permissions for mihomo. The desktop application itself should not run as root. A launcher with `NoNewPrivs: 1` can prevent core file capabilities from taking effect; use a normal authorized desktop launch and diagnose the permission error rather than bypassing sandbox restrictions. This candidate has no general-purpose privilege broker.
+
+## Data and safety
+
+| Default location | Purpose |
 |---|---|
-| Language | Go 1.27 |
-| UI | [MyGo](https://github.com/egoist/mygo) (native mode, GPU-drawn, no webview) |
-| Components | [Onevra](https://github.com/oneo-me/onevra) v0.2026.18 |
-| Core | mihomo as a sidecar process, driven via its REST API |
-| State | Plain files under XDG dirs — no database |
+| `~/.config/clashgo/master.yaml` | User-owned base profile |
+| `~/.config/clashgo/profiles/` | Named profiles |
+| `~/.config/clashgo/settings.json` | App settings and controller secret |
+| `~/.config/clashgo/subscriptions.json` | Application-owned subscription registry |
+| `~/.local/state/clashgo/runtime/` | Rendered configuration, provider caches, core data |
+| `~/.local/state/clashgo/logs/` | Logs |
 
-## Roadmap
+`XDG_CONFIG_HOME` and `XDG_STATE_HOME` override the corresponding roots. **Do not hand-edit `subscriptions.json` while ClashGo is running.** Back up user profiles separately from generated runtime files. Treat all subscription/configuration exports as potentially sensitive.
 
-- **Phase 0** — Desktop spike: tray on the target desktop, IME input,
-  launching mihomo and switching nodes via the API, system-proxy set/restore.
-- **Phase 1 (MVP)** — System-proxy mode, subscription pools, user rules,
-  config snapshots and rollback, tray + main window.
-- **Phase 2** — TUN mode via a small privileged helper (polkit), kill switch.
-- **Phase 3** — Packaging (AUR + GitHub Releases), polish, accessibility pass.
+## Validation
 
-## License
+```bash
+GOPROXY=off go test ./... -count=1
+GOPROXY=off go vet ./...
 
-GPL-3.0. See [LICENSE](LICENSE).
+# Optional real-core integration coverage; core cases otherwise skip.
+CLASHGO_TEST_MIHOMO=/usr/bin/mihomo \
+  GOPROXY=off go test -race ./... -count=1
+```
 
----
+Functional UI experiments must use separate XDG directories, unused ports, synthetic credentials, and TUN disabled. Use a private D-Bus session and `GSETTINGS_BACKEND=memory` so a test cannot take over the desktop proxy. Do not use a live user profile as a fixture.
 
-## 中文说明
+## Known boundaries
 
-**ClashGo 是一个为 [mihomo](https://github.com/MetaCubeX/mihomo) 内核写的轻量 Linux 桌面客户端，用 Go + MyGo 构建。**
+- Multi-file publication rolls back ordinary errors; it is **not crash-atomic** across source files, registry, provider caches, settings, and a running core.
+- DNS observations are derived from core logs, not a complete structured DNS event stream. Resolver identity does not establish direct/proxy routing.
+- Automatic subscription refresh currently uses a fixed 24-hour interval. There is no per-subscription schedule UI.
+- On the tested host, UU accelerator sessions conflict with gVisor TUN. Turn TUN off for UU; automatic coexistence is not implemented.
+- Native GTK/portal warnings remain in some environments. Other desktops, accessibility, packaging, backup/sync, and broad protocol compatibility need further testing.
+- There is no kill-switch guarantee, WebDAV/SubStore integration, universal URL-scheme import, or bundled self-updater.
 
-它走小火箭式的分工模型：主配置是归你所有的一份文件，订阅只通过
-`proxy-providers` 往里喂节点；规则与策略组恒在主配置里，换订阅、订阅过期，
-都不会把你的规则一起带走。
+[`AUDIT.md`](AUDIT.md) records the engineering audit, implemented work, measurements, and remaining risks. Older documents in `docs/` are historical design/validation notes, not authoritative current installation instructions.
 
-> 状态：**第 0 期**——项目骨架与桌面尖刺验证阶段，尚不可用。
-> ClashGo 是独立的第三方客户端，与 MetaCubeX 无关。
+## License and acknowledgements
 
-### 解决什么问题
-
-主流 Clash 客户端用的是机场整包模型（节点+分组+规则打包下发），绑在某个
-订阅上的用户规则会随切换订阅静默失效；客户端本体也偏重（一个托盘加切节点
-的功能常驻数百 MB）。ClashGo 反着来：单个小体积原生二进制、全部状态文件化
-（可查、可备份、无数据库），配置生效走「渲染 → `mihomo -t` 校验 → 原子替换
-→ 热重载」管线，失败自动回滚，订阅刷新永远刷不断网。
-
-### 路线图
-
-- **第 0 期**——桌面尖刺：托盘、中文输入法、拉起 mihomo 并经 API 切节点、系统代理开关与崩溃还原；
-- **第 1 期（MVP）**——系统代理模式、订阅节点池、用户规则、配置快照与回滚、托盘与主窗口；
-- **第 2 期**——TUN 模式（polkit 特权助手）与 kill switch；
-- **第 3 期**——打包发布（AUR + GitHub Releases）、打磨与无障碍。
-
-### 许可证
-
-GPL-3.0，见 [LICENSE](LICENSE)。
+ClashGo is licensed under **GPL-3.0**; see [`LICENSE`](LICENSE). Dependencies and the separately installed mihomo core retain their own licenses. Thanks to MyGo, Onevra, mihomo, and the open-source Go ecosystem. The cat application/tray artwork is maintained in [`assets/`](assets/).

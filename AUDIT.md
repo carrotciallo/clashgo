@@ -243,3 +243,11 @@ UI 明确问题：
 - 首次实机安装优化版后，日志显示UI149ms、配置验证403ms、控制器708ms、接管检查902ms、仪表盘910ms；Meta UP/MTU1500，Google经TUN204、GitHub200。之后按新反馈替换托盘美术资源，启动逻辑不变。第二次实机启动接管检查为2893ms，说明受机器负载/桌面初始化影响，不能保证生产每次低于1秒。
 - 最终按用户反馈将填充猫外轮廓从5加粗到9（+80%），不改五官、胡须或软件图标。代码提交 `6c7dec0`，安装产物 `/tmp/clashgo-delivery/clashgo-startup` 与 `/home/user/.local/bin/clashgo` 一致，SHA256 `5860c259eedacdc0cedee7833bfe1cb99dcd2a6d702200e298c2d0320acdc430`。当前应用PID<pid>由原用户瞬态服务启动，NoNewPrivs=0；Meta UP/MTU1500、Google经TUN204，D-Bus导出托盘PNG与新版资源哈希一致。最近备份 `/home/user/.local/state/binary-backups/clashgo-before-startup-20261116-063529`，本轮前的TUN修复版备份为 `/home/user/.local/state/binary-backups/clashgo-before-startup-20261116-062950`。
 - 最终轮廓调整后完整普通测试与gofmt通过；前一填充猫版本全量真实mihomo race及vet通过，最后一提交仅改变SVG描边宽度和对应PNG。未直接编辑生产主配置或订阅注册表，未读取生产控制器密钥，未推送远端。保留首次缺失订阅串行下载、完整验证以及既有审计中说明的其他限制。
+
+### GitHub 候选发布收尾（v0.1.0-rc.1）
+
+- 依赖提交 `74e10e3`：MyGo 0.8.3→0.9.1、purego 0.11.2→0.11.3、x/image 0.47.0→0.48.0、x/net 0.61.0→0.62.0、x/text 0.43.0→0.44.0。Onevra 0.2026.18、yaml 3.0.1、flagicons 0.0.2、typesetting 0.3.5 在查询时没有更新稳定版，未为凑升级改用开发版本。`go mod tidy` 修正 flagicons 为直接依赖，`go mod verify` 通过。
+- 升级后全量离线普通测试、真实隔离 mihomo 的全量 race、vet 与构建通过。隔离原生实例验证配置/监听、彩色托盘资源、重复实例退出1、正常退出释放端口；独立 XDG、私有 D-Bus、内存 gsettings、无 TUN、合成凭据，未用生产做实验。测试脚本第一次同时终止应用和私有总线，因包装进程早退误报监听残留（退出1）；改为只通知应用并等包装进程完成后通过，未修改产品以适配错误测试。既有 GTK/portal 警告仍存在。
+- 重写英文 `README.md`，新增对等的 `README.zh-CN.md`：猫猫页首、候选版本徽标、真实产品边界、依赖及构建、权限与数据安全、测试命令和已知限制。删除旧的“Phase 0 尚不可用”和“订阅刷新永远不断网”等过时或绝对承诺。使用本地附注标签 `v0.1.0-rc.1`，不冒称已有线上 Release。
+- 本机 `mainland-proxy` 技能已迁移至 ClashGo/7897 口径；FlClash 用户启动入口与旧协议关联已移除，旧用户数据保留。软件包卸载被执行环境的 NoNewPrivs 限制阻止，已交代用户在普通桌面终端执行 `sudo pacman -R flclash-bin`；未绕过限制，也不把软件包标记为已卸载。此项环境清理不属于候选二进制的功能。
+- 尚未连接或推送 GitHub 远端；交给 Muse 独立复核后发布。正式上传前应再次检查完整 Git 历史中的隐私与凭据，以及依赖/图标/内核的许可证边界。候选版保留前述事务、DNS、UU、首次下载、桌面兼容性及打包限制，不将其包装成稳定版保证。
