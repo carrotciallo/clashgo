@@ -7,7 +7,7 @@
     </linearGradient>
   </defs>
   <g transform="translate(-44.8 -46.825) scale(1.35)">
-    <path d="M57 119 L55 60 Q55 51 63 56 L101 84 Q128 77 155 84 L193 56 Q201 51 201 60 L199 119 Q214 145 197 173 Q177 204 128 204 Q79 204 59 173 Q42 145 57 119Z" fill="url(#fur)" stroke="#23535D" stroke-width="5" stroke-linejoin="round"/>
+    <path d="M57 119 L55 60 Q55 51 63 56 L101 84 Q128 77 155 84 L193 56 Q201 51 201 60 L199 119 Q214 145 197 173 Q177 204 128 204 Q79 204 59 173 Q42 145 57 119Z" fill="url(#fur)" stroke="#23535D" stroke-width="9" stroke-linejoin="round"/>
     <path d="M70 77 L72 109 L91 94Z M186 77 L184 109 L165 94Z" fill="#238C89"/>
     <ellipse cx="94" cy="136" rx="11" ry="17" fill="#123B46"/>
     <ellipse cx="162" cy="136" rx="11" ry="17" fill="#123B46"/>
