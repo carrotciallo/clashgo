@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"strings"
@@ -427,7 +428,7 @@ func (a *App) pageOverview(c *ui.Context) {
 	lan := a.localIP
 	conns := a.conns
 	recent := a.recent
-	svcResults := a.svcResults
+	svcResults := maps.Clone(a.svcResults)
 	upPeak, downPeak := a.maxUpRate, a.maxDownRate
 	dnsTotal := a.dnsTotal
 	egressOrg := a.egressOrg

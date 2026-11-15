@@ -4,6 +4,7 @@ import (
 	"github.com/egoist/mygo/ui"
 	ov "github.com/oneo-me/onevra/source/components"
 	"github.com/oneo-me/onevra/source/icons/lucide"
+	"maps"
 )
 
 // pageServices is the service-status sub-page behind the dashboard
@@ -12,7 +13,7 @@ import (
 // cover.
 func (a *App) pageServices(c *ui.Context) {
 	a.mu.Lock()
-	results := a.svcResults
+	results := maps.Clone(a.svcResults)
 	a.mu.Unlock()
 
 	ui.Row(c).AlignItems(ui.Center).Gap(4).Children(func() {

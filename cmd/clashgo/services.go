@@ -60,9 +60,9 @@ func svcStatusText(r svcResult) (string, ui.Color) {
 }
 
 // enabledServices resolves the user's selection from settings
-// (empty selection = the whole catalog).
+// (nil selection = the whole catalog; empty selection = none).
 func (a *App) enabledServices() []svcDef {
-	if len(a.set.Services) == 0 {
+	if a.set.Services == nil {
 		return serviceDefs
 	}
 	want := map[string]bool{}
@@ -92,7 +92,7 @@ func (a *App) serviceEnabled(name string) bool {
 // all-on default first).
 func (a *App) setServiceEnabled(name string, on bool) {
 	names := []string{}
-	if len(a.set.Services) == 0 {
+	if a.set.Services == nil {
 		for _, d := range serviceDefs {
 			names = append(names, d.Name)
 		}
@@ -145,6 +145,7 @@ func (a *App) checkServices() {
 		Timeout:   8 * time.Second,
 		Transport: &http.Transport{Proxy: http.ProxyURL(proxyURL)},
 	}
+	defer cl.CloseIdleConnections()
 	var wg sync.WaitGroup
 	for _, d := range defs {
 		wg.Add(1)

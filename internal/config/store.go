@@ -33,8 +33,8 @@ type Settings struct {
 	ActiveProfile  string `json:"activeProfile"`
 	DefaultProfile string `json:"defaultProfile"`
 	// Services lists the dashboard service checks the user enabled
-	// (names from the built-in catalog); empty means all of them.
-	Services []string `json:"services,omitempty"`
+	// (names from the built-in catalog); nil means defaults, [] means none.
+	Services []string `json:"services"`
 	// CollapsedSubs lists subscriptions whose node list is
 	// folded away on the nodes page (UI state, persisted so the
 	// fold survives restarts).
