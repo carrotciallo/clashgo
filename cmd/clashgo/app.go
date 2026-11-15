@@ -264,7 +264,7 @@ func (a *App) installRuntime(reload bool) error {
 			if err := client.ReloadConfig(path); err != nil {
 				return err
 			}
-			return a.waitTUNReady(client, a.settings().TUNEnabled)
+			return a.waitCaptureReady(client, a.settings().MixedPort, a.settings().TUNEnabled)
 		}
 	}
 	return config.InstallRuntime(a.store.RenderedPath(), rendered, func(path string) error {
@@ -382,7 +382,7 @@ func (a *App) startCore() {
 		a.startupMark("controller_ready")
 	}
 	if err == nil {
-		err = a.waitTUNReady(a.client(), a.settings().TUNEnabled)
+		err = a.waitCaptureReady(a.client(), a.settings().MixedPort, a.settings().TUNEnabled)
 	}
 	if err != nil {
 		a.sup.Stop()

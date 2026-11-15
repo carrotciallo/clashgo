@@ -99,6 +99,12 @@ rules: ["MATCH,DIRECT"]
 	if err := client.WaitReady(5 * time.Second); err != nil {
 		t.Fatal(err)
 	}
+	// The controller starts before mihomo finishes applying its listeners.
+	readyCtx, readyCancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer readyCancel()
+	if err := client.WaitCaptureReady(readyCtx, mixed, false); err != nil {
+		t.Fatal(err)
+	}
 	runtimeCapture, err := client.CaptureConfig(context.Background())
 	if err != nil || runtimeCapture.MixedPort != mixed || runtimeCapture.TUN.Enable {
 		t.Fatalf("runtime capture state mismatch: %+v, %v", runtimeCapture, err)

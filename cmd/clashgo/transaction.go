@@ -98,7 +98,7 @@ func (a *App) commitConfiguration(next config.Settings, source string, replaceSo
 				if err := a.sup.Start(runtimePath); err != nil {
 					return err
 				}
-				if err := nextClient.WaitReady(readyTimeout); err != nil {
+				if err := nextClient.WaitReadyContext(a.appContext(), readyTimeout); err != nil {
 					a.sup.Stop()
 					return err
 				}
@@ -110,7 +110,7 @@ func (a *App) commitConfiguration(next config.Settings, source string, replaceSo
 					return err
 				}
 			}
-			if err := a.waitTUNReady(nextClient, next.TUNEnabled); err != nil {
+			if err := a.waitCaptureReady(nextClient, next.MixedPort, next.TUNEnabled); err != nil {
 				return err
 			}
 			px := oldProxy
@@ -162,7 +162,7 @@ func (a *App) commitConfiguration(next config.Settings, source string, replaceSo
 				e = oldClient.ReloadConfig(runtimePath)
 			}
 			if e == nil && wasRunning {
-				e = a.waitTUNReady(oldClient, old.TUNEnabled)
+				e = a.waitCaptureReady(oldClient, old.MixedPort, old.TUNEnabled)
 			}
 			a.mu.Lock()
 			a.coreOK = wasRunning && e == nil

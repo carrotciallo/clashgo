@@ -2,8 +2,6 @@ package main
 
 import (
 	"context"
-	"net"
-	"strconv"
 	"time"
 
 	"github.com/carrotciallo/clashgo/internal/core"
@@ -21,30 +19,15 @@ func proxyServiceReady(ctx context.Context, client *core.Client, mixedPort int, 
 	if !healthy {
 		return false
 	}
-	runtime, err := client.CaptureConfig(ctx)
-	if err != nil || runtime.MixedPort != mixedPort {
-		return false
-	}
-	if tunWanted && core.CheckTUNDevice(runtime) != nil {
-		return false
-	}
-	conn, err := (&net.Dialer{}).DialContext(ctx, "tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(mixedPort)))
-	if err != nil {
-		return false
-	}
-	conn.Close()
-	return true
+	return client.CheckCaptureReady(ctx, mixedPort, tunWanted) == nil
 }
 
-// waitTUNReady is shared by startup, activation and rollback before they claim
+// waitCaptureReady is shared by startup, activation and rollback before they claim
 // successful capture or neutralize the existing system proxy.
-func (a *App) waitTUNReady(client *core.Client, enabled bool) error {
-	if !enabled {
-		return nil
-	}
+func (a *App) waitCaptureReady(client *core.Client, port int, enabled bool) error {
 	ctx, cancel := context.WithTimeout(a.appContext(), 3*time.Second)
 	defer cancel()
-	return client.WaitTUNReady(ctx)
+	return client.WaitCaptureReady(ctx, port, enabled)
 }
 
 func (a *App) refreshCaptureStatus() {
