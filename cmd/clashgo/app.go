@@ -984,9 +984,6 @@ func (a *App) duplicateProfile(name string) {
 // exportProfile copies a profile file to a user-chosen path.
 func (a *App) exportProfile(name string) {
 	path := a.store.ProfilePath(name)
-	if name == "" || name == a.set.ActiveProfile {
-		path = a.store.MasterPath()
-	}
 	pickSaveFile("导出配置", profileDisplayName(name)+".yaml", func(dst string) {
 		data, err := os.ReadFile(path)
 		if err == nil {
@@ -1004,9 +1001,6 @@ func (a *App) exportProfile(name string) {
 // editor (编辑纯文本）.
 func (a *App) openProfileText(name string) {
 	path := a.store.ProfilePath(name)
-	if name == "" || name == a.set.ActiveProfile {
-		path = a.store.MasterPath()
-	}
 	go func() {
 		if err := exec.Command("xdg-open", path).Start(); err != nil {
 			a.setMsg("打开编辑器失败：%v", err)

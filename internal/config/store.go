@@ -100,6 +100,9 @@ func (s *Store) MasterPath() string {
 func (s *Store) ProfilesDir() string { return filepath.Join(s.ConfigDir, "profiles") }
 
 func (s *Store) ProfilePath(name string) string {
+	if name == "" {
+		return filepath.Join(s.ConfigDir, "master.yaml")
+	}
 	return filepath.Join(s.ProfilesDir(), name+".yaml")
 }
 
