@@ -240,4 +240,6 @@ UI 明确问题：
 - 仍保留完整配置验证；研究中最小独立mihomo验证中位数仅14.5ms，未引入缓存或跳过验证。缺失订阅首次下载的有界并行属于后续可选优化：当前仍串行，避免在本轮速度调整中改变失败节点池与启动配置的语义。已有缓存路径无需下载。未改mihomo健康检查调度或代理所有权策略。
 - 测试：完整离线测试、真实隔离mihomo全量race及vet通过。新增出口查询不阻塞核心操作、取消与过期结果拒绝、组织缓存、provider请求计数、短间隔重试、版本先就绪但配置/监听未就绪的回归覆盖。主动LSP检查9个改动文件无编译诊断；辅助Semgrep仍报告既有终端脱离逻辑的动态exec，参数来自 `os.Executable()` 与本进程参数，无shell拼接，本轮未更改该逻辑。
 - 隔离对比：独立XDG目录、私有D-Bus、内存gsettings、随机端口、无TUN/远端订阅的最小配置，新旧各3次交替启动。未清操作系统页缓存，不代表生产冷机启动。控制器加监听就绪中位数314.3→316.0ms（基本不变）；托盘正常图标文件生成2588.1→579.3ms（减少77.6%）。20ms采样，指标为后端图标文件生成而非桌面绘制完成。结果 `/tmp/clashgo-startup-compare-result.json`。隔离门户仍有FUSE权限/GTK scale-factor警告，不影响验证，但未宣称原生库警告已修复。
-- 首次实机安装优化版后，日志显示UI149ms、配置验证403ms、控制器708ms、接管检查902ms、仪表盘910ms；Meta UP/MTU1500，Google经TUN204、GitHub200。之后按新反馈替换托盘美术资源，启动逻辑不变。
+- 首次实机安装优化版后，日志显示UI149ms、配置验证403ms、控制器708ms、接管检查902ms、仪表盘910ms；Meta UP/MTU1500，Google经TUN204、GitHub200。之后按新反馈替换托盘美术资源，启动逻辑不变。第二次实机启动接管检查为2893ms，说明受机器负载/桌面初始化影响，不能保证生产每次低于1秒。
+- 最终按用户反馈将填充猫外轮廓从5加粗到9（+80%），不改五官、胡须或软件图标。代码提交 `6c7dec0`，安装产物 `/tmp/clashgo-delivery/clashgo-startup` 与 `/home/user/.local/bin/clashgo` 一致，SHA256 `5860c259eedacdc0cedee7833bfe1cb99dcd2a6d702200e298c2d0320acdc430`。当前应用PID<pid>由原用户瞬态服务启动，NoNewPrivs=0；Meta UP/MTU1500、Google经TUN204，D-Bus导出托盘PNG与新版资源哈希一致。最近备份 `/home/user/.local/state/binary-backups/clashgo-before-startup-20261116-063529`，本轮前的TUN修复版备份为 `/home/user/.local/state/binary-backups/clashgo-before-startup-20261116-062950`。
+- 最终轮廓调整后完整普通测试与gofmt通过；前一填充猫版本全量真实mihomo race及vet通过，最后一提交仅改变SVG描边宽度和对应PNG。未直接编辑生产主配置或订阅注册表，未读取生产控制器密钥，未推送远端。保留首次缺失订阅串行下载、完整验证以及既有审计中说明的其他限制。
