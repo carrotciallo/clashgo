@@ -4,6 +4,8 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
 
 // sampleConf exercises every translation the converter claims:
@@ -92,7 +94,11 @@ func TestTranslateSample(t *testing.T) {
 	}
 	// [Host]: localhost becomes a hosts entry; server:system and
 	// server:<ip> become nameserver-policy entries.
-	if !strings.Contains(master, "hosts:") || !strings.Contains(master, `"localhost": 127.0.0.1`) {
+	var hostDoc map[string]any
+	if err := yaml.Unmarshal([]byte(master), &hostDoc); err != nil {
+		t.Fatal(err)
+	}
+	if hosts, ok := hostDoc["hosts"].(map[string]any); !ok || hosts["localhost"] != "127.0.0.1" {
 		t.Error("hosts entry lost")
 	}
 	if !strings.Contains(master, `"+.apple.com":`) || !strings.Contains(master, `"+.example.net":`) {
@@ -104,7 +110,11 @@ func TestTranslateSample(t *testing.T) {
 	if n := strings.Count(master, "\nrule-providers:"); n != 1 {
 		t.Errorf("expected exactly 1 rule-providers block, got %d", n)
 	}
-	// The result must survive the normal render path.
+	// The result must survive a strict YAML parse and the normal render path.
+	var decoded map[string]any
+	if err := yaml.Unmarshal([]byte(master), &decoded); err != nil {
+		t.Fatalf("translated YAML is invalid: %v", err)
+	}
 	out := Render(master, nil, Settings{MixedPort: 7897, ControllerPort: 9097})
 	if !strings.Contains(out, "RULE-SET,appletv,节点选择") {
 		t.Error("rendered import lost its rules")
@@ -125,6 +135,13 @@ func TestTranslateFragment(t *testing.T) {
 	joined := strings.Join(rep.Notes, " ")
 	if !strings.Contains(joined, "FINAL") {
 		t.Errorf("missing-FINAL note absent: %v", rep.Notes)
+	}
+}
+
+func TestTranslateMalformedKnownRule(t *testing.T) {
+	_, rep, err := TranslateShadowrocket("[Rule]\nDOMAIN\nIP-CIDR,x\nDOMAIN,x,no-resolve\nFINAL,DIRECT\n")
+	if err != nil || len(rep.Dropped) != 3 {
+		t.Fatalf("malformed rules not reported: %+v, %v", rep, err)
 	}
 }
 

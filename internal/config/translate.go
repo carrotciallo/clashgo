@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+
+	"gopkg.in/yaml.v3"
 )
 
 // Format adaptation: import a Shadowrocket .conf (or a bare Surge
@@ -106,10 +108,10 @@ func TranslateShadowrocket(conf string) (string, ImportReport, error) {
 					key := "+." + strings.TrimPrefix(k, "*.")
 					hostPolicy = append(hostPolicy, fmt.Sprintf("    %q:", key))
 					for _, s := range servers {
-						hostPolicy = append(hostPolicy, "      - "+s)
+						hostPolicy = append(hostPolicy, fmt.Sprintf("      - %q", s))
 					}
 				} else {
-					hosts = append(hosts, fmt.Sprintf("  %q: %s", k, v))
+					hosts = append(hosts, fmt.Sprintf("  %q: %q", k, v))
 				}
 			}
 		case "general":
@@ -267,24 +269,51 @@ func stripRuleProviders(master string) string {
 	return strings.Join(out, "\n")
 }
 
-// insertHostPolicy appends entries to the template's
-// nameserver-policy block, right after the geosite:cn,private
-// entry's server lines.
+// Imported host policies replace matching template keys rather than creating
+// duplicate YAML keys. Nodes preserve the template's comments and quote styles.
 func insertHostPolicy(master string, entries []string) string {
-	lines := strings.Split(master, "\n")
-	for i, ln := range lines {
-		if strings.TrimSpace(ln) == `"geosite:cn,private":` {
-			j := i + 1
-			for j < len(lines) && strings.HasPrefix(lines[j], "      ") {
-				j++
+	var doc, imported yaml.Node
+	if yaml.Unmarshal([]byte(master), &doc) != nil || yaml.Unmarshal([]byte(strings.Join(entries, "\n")), &imported) != nil {
+		return master
+	}
+	var merge func(*yaml.Node)
+	merge = func(n *yaml.Node) {
+		if n.Kind == yaml.MappingNode {
+			for i := 0; i+1 < len(n.Content); i += 2 {
+				if n.Content[i].Value != "nameserver-policy" {
+					continue
+				}
+				policy := n.Content[i+1]
+				for j := 0; j+1 < len(imported.Content[0].Content); j += 2 {
+					key, value := imported.Content[0].Content[j], imported.Content[0].Content[j+1]
+					found := false
+					for k := 0; k+1 < len(policy.Content); k += 2 {
+						if policy.Content[k].Value == key.Value {
+							policy.Content[k+1] = value
+							found = true
+							break
+						}
+					}
+					if !found {
+						policy.Content = append(policy.Content, key, value)
+					}
+				}
+				return
 			}
-			out := append([]string{}, lines[:j]...)
-			out = append(out, entries...)
-			out = append(out, lines[j:]...)
-			return strings.Join(out, "\n")
+		}
+		for _, child := range n.Content {
+			merge(child)
 		}
 	}
-	return master
+	merge(&doc)
+	var out strings.Builder
+	enc := yaml.NewEncoder(&out)
+	enc.SetIndent(2)
+	if enc.Encode(&doc) != nil {
+		return master
+	}
+	_ = enc.Close()
+	return out.String()
 }
 
 type translator struct {
@@ -392,6 +421,10 @@ func (t *translator) rule(ln string, rep *ImportReport) {
 	}
 	if !knownRuleTypes[typ] {
 		rep.Dropped = append(rep.Dropped, ln+"（规则类型 "+typ+" 不支持）")
+		return
+	}
+	if len(fields) < 3 || fields[1] == "" || fields[2] == "" || (fields[len(fields)-1] == "no-resolve" && len(fields) < 4) {
+		rep.Dropped = append(rep.Dropped, ln+"（规则缺少匹配内容或策略）")
 		return
 	}
 	head, policy, params := splitPolicy(fields)
