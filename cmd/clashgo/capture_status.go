@@ -3,44 +3,42 @@ package main
 import (
 	"context"
 	"net"
+	"strconv"
 	"time"
+
+	"github.com/carrotciallo/clashgo/internal/core"
 )
 
 // captureSample is sampled by the serialized worker, including while hidden.
-// It describes local traffic capture, not reachability of every remote node.
+// It describes local proxy availability, not global capture or remote reachability.
 type captureSample struct {
 	Active bool
-	TUN    bool
 	PID    int
 }
 
-func captureEffective(healthy, tunWanted, tunReady, proxyOwned bool) bool {
+func proxyServiceReady(ctx context.Context, client *core.Client, mixedPort int, healthy bool) bool {
 	if !healthy {
 		return false
 	}
-	if tunWanted {
-		return tunReady
+	runtime, err := client.CaptureConfig(ctx)
+	if err != nil || runtime.MixedPort != mixedPort {
+		return false
 	}
-	return proxyOwned
+	conn, err := (&net.Dialer{}).DialContext(ctx, "tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(mixedPort)))
+	if err != nil {
+		return false
+	}
+	conn.Close()
+	return true
 }
 
 func (a *App) refreshCaptureStatus() {
 	settings := a.settings()
-	sample := captureSample{TUN: settings.TUNEnabled, PID: a.sup.PID()}
+	sample := captureSample{PID: a.sup.PID()}
 	if a.coreHealthy() && a.sup.Running() {
 		ctx, cancel := context.WithTimeout(a.appContext(), 1500*time.Millisecond)
-		runtime, err := a.client().CaptureConfig(ctx)
+		sample.Active = proxyServiceReady(ctx, a.client(), settings.MixedPort, true)
 		cancel()
-		if err == nil && runtime.MixedPort == settings.MixedPort {
-			tunReady, owned := false, false
-			if settings.TUNEnabled && runtime.TUN.Enable {
-				device, err := net.InterfaceByName(runtime.TUN.Device)
-				tunReady = err == nil && device.Flags&net.FlagUp != 0
-			} else if !settings.TUNEnabled {
-				owned = a.proxyManager().Armed()
-			}
-			sample.Active = captureEffective(true, settings.TUNEnabled, tunReady, owned)
-		}
 	}
 	a.mu.Lock()
 	a.capture = sample

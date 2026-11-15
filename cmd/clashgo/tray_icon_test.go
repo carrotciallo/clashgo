@@ -2,9 +2,17 @@ package main
 
 import (
 	"bytes"
+	"context"
+	"fmt"
 	"image/color"
 	"image/png"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"strconv"
 	"testing"
+
+	"github.com/carrotciallo/clashgo/internal/core"
 )
 
 func TestTrayUsesSameCatInColorAndGray(t *testing.T) {
@@ -41,21 +49,51 @@ func TestTrayUsesSameCatInColorAndGray(t *testing.T) {
 	}
 }
 
-func TestCaptureEffectiveRequiresHealthySelectedCapture(t *testing.T) {
+// A usable local proxy must stay colored even when the user disables global
+// capture and connects individual applications to the mixed port directly.
+func TestProxyServiceReadyIndependentOfSystemCapture(t *testing.T) {
 	for _, tc := range []struct {
-		name                                string
-		healthy, tun, tunReady, owned, want bool
+		name                                        string
+		healthy, listening, tun, mismatch, canceled bool
+		status                                      int
+		want                                        bool
 	}{
-		{"stopped", false, false, false, true, false},
-		{"system owned", true, false, false, true, true},
-		{"system stolen", true, false, false, false, false},
-		{"settings alone", true, true, false, false, false},
-		{"tun ready", true, true, true, false, true},
-		{"tun missing despite system proxy", true, true, false, true, false},
-		{"system mode ignores tun", true, false, true, false, false},
+		{"manual proxy without system capture", true, true, false, false, false, 200, true},
+		{"tun enabled", true, true, true, false, false, 200, true},
+		{"stopped core", false, true, false, false, false, 200, false},
+		{"listener closed", true, false, false, false, false, 200, false},
+		{"tun flag alone", true, false, true, false, false, 200, false},
+		{"wrong port", true, true, false, true, false, 200, false},
+		{"unauthorized", true, true, false, false, false, 401, false},
+		{"controller error", true, true, false, false, false, 503, false},
+		{"canceled", true, true, false, false, true, 200, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := captureEffective(tc.healthy, tc.tun, tc.tunReady, tc.owned); got != tc.want {
+			listener, err := net.Listen("tcp", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer listener.Close()
+			_, portText, _ := net.SplitHostPort(listener.Addr().String())
+			port, _ := strconv.Atoi(portText)
+			if !tc.listening {
+				listener.Close()
+			}
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(tc.status)
+				reported := port
+				if tc.mismatch {
+					reported++
+				}
+				fmt.Fprintf(w, `{"mixed-port":%d,"tun":{"enable":%t}}`, reported, tc.tun)
+			}))
+			defer server.Close()
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			if tc.canceled {
+				cancel()
+			}
+			if got := proxyServiceReady(ctx, core.NewClient(server.URL, ""), port, tc.healthy); got != tc.want {
 				t.Fatalf("got %v, want %v", got, tc.want)
 			}
 		})
