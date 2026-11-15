@@ -1,0 +1,4 @@
+/clashgo
+/dist/
+*.log
+.DS_Store
