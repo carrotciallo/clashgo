@@ -438,7 +438,7 @@ func (a *App) pageOverview(c *ui.Context) {
 
 	// ---- status row: three separate cards — status / upload /
 	// download — stretched to one height. ----
-	ui.Row(c).Gap(14).AlignItems(ui.Stretch).Children(func() {
+	dashboardGrid(c).Children(func() {
 		statCard(c, 2, func() {
 			ui.Row(c).Gap(14).AlignItems(ui.Center).FillHeight().Children(func() {
 				ui.Column(c).Grow(1).Gap(4).FillHeight().Children(func() {
@@ -452,7 +452,7 @@ func (a *App) pageOverview(c *ui.Context) {
 						ui.Box(c).Grow(1)
 						txt(c, fmt.Sprintf("mihomo · 127.0.0.1:%d", a.set.MixedPort), fsMicro, false, colFaint).SingleLine()
 					})
-					ui.Box(c).Height(4)
+					ui.Box(c).Grow(1)
 					// The headline names the node traffic is actually leaving
 					// through. When the core reports no exit yet, the tail of
 					// the resolved chain stands in for it, so the card never
@@ -513,8 +513,8 @@ func (a *App) pageOverview(c *ui.Context) {
 					})
 					txt(c, title, fsSmall, true, colMuted).Grow(1)
 				})
-				ui.Box(c).Height(4)
-				ui.Row(c).Gap(3).AlignItems(ui.End).Children(func() {
+				ui.Box(c).Grow(1)
+				ui.Row(c).Gap(3).AlignItems(ui.End).Justify(ui.Center).Children(func() {
 					num(c, humanBytes(rate), fsDisplay, true, colText)
 					txt(c, "/s", fsSmall, false, colFaint)
 				})
@@ -560,10 +560,8 @@ func (a *App) pageOverview(c *ui.Context) {
 		})
 	})
 
-	// ---- info tiles: all four in ONE row, pinned to one compact
-	// height. Stretching them to the tallest tile's natural size
-	// left the short tiles with half an empty face. ----
-	ui.Row(c).Gap(14).AlignItems(ui.Stretch).Children(func() {
+	// ---- info tiles share the status row's four tracks and height. ----
+	dashboardGrid(c).Children(func() {
 		miniCard(c, lucide.Network(), "内网 IP", func() {
 			if lan == "" {
 				txt(c, "—", fsMetric, true, colFaint).SingleLine()
@@ -572,11 +570,8 @@ func (a *App) pageOverview(c *ui.Context) {
 				// twelve-plus glyphs and has to survive a narrow tile.
 				num(c, lan, fsMetric, true, colText).LetterSpacing(-0.3).SingleLine()
 			}
+		}, func() {
 			caption(c, fmt.Sprintf("混合 %d · 控制 %d", a.set.MixedPort, a.set.ControllerPort))
-			// Capture state is the tile's footer: the four tiles in this
-			// row are equal height, so each parks its last line on the
-			// same baseline instead of trailing its own text.
-			ui.Box(c).Grow(1)
 			sub, tone := "未接管", colFaint
 			if a.set.TUNEnabled {
 				sub, tone = "虚拟网卡接管中", colOK
@@ -592,7 +587,7 @@ func (a *App) pageOverview(c *ui.Context) {
 				rules = fmt.Sprintf("%d 条规则", len(config.ExtractRules(master)))
 			}
 			caption(c, fmt.Sprintf("%d 个订阅 · %s", len(a.reg.Subs), rules))
-			ui.Box(c).Grow(1)
+		}, func() {
 			if u := firstQuotaSub(a.reg.Subs); u != nil {
 				pct := int(u.UsedBytes() * 100 / u.TotalBytes)
 				if pct > 100 {
@@ -605,10 +600,7 @@ func (a *App) pageOverview(c *ui.Context) {
 						caption(c, fmt.Sprintf("剩余 %d 天", days))
 					}
 				})
-				ui.Row(c).AlignItems(ui.End).Gap(6).Children(func() {
-					num(c, fmt.Sprintf("%d%%", pct), fsMetric, true, colText).Grow(1)
-					caption(c, humanBytes(u.UsedBytes())+" / "+humanBytes(u.TotalBytes))
-				})
+				caption(c, fmt.Sprintf("%d%% · %s / %s", pct, humanBytes(u.UsedBytes()), humanBytes(u.TotalBytes)))
 				barTrack(c, 5, func() {
 					if pct > 0 {
 						ui.Box(c).Grow(float32(pct)).Height(5).Radius(999).Background(colAccent)
@@ -621,8 +613,7 @@ func (a *App) pageOverview(c *ui.Context) {
 		})
 		// Service status gets a custom card (not miniCard): a header
 		// re-check icon and a footer row opening the full page.
-		ui.Column(c).Grow(1).FillHeight().Background(colPanel).Border(1, colBorder).
-			Radius(18).Padding(16, 17).Gap(8).Children(func() {
+		statCard(c, 1, func() {
 			ui.Row(c).AlignItems(ui.Center).Gap(7).Children(func() {
 				ui.Row(c).Width(22).Height(22).Radius(7).Background(colWash).
 					AlignItems(ui.Center).Padding(4).TextColor(colAccent).Children(func() {
@@ -633,7 +624,7 @@ func (a *App) pageOverview(c *ui.Context) {
 					go a.checkServices()
 				}
 			})
-			ui.Box(c).Height(2)
+			ui.Box(c).Grow(1)
 			defs := a.enabledServices()
 			for i, d := range defs {
 				if i >= 3 {
@@ -661,8 +652,8 @@ func (a *App) pageOverview(c *ui.Context) {
 		})
 		miniCard(c, lucide.MemoryStick(), "内存信息", func() {
 			num(c, humanBytes(appMem+coreMem), fsMetric, true, colText).LetterSpacing(-0.3)
+		}, func() {
 			caption(c, fmt.Sprintf("应用 %s · 内核 %s", humanBytes(appMem), humanBytes(coreMem)))
-			ui.Box(c).Grow(1)
 			if total := appMem + coreMem; total > 0 {
 				barTrack(c, 5, func() {
 					if appMem > 0 {
@@ -733,9 +724,8 @@ func actionRow(c *ui.Context, label string, icon *ui.SVG, danger bool, fn func()
 }
 
 // miniCard is one of the dashboard's four compact info tiles.
-func miniCard(c *ui.Context, icon *ui.SVG, title string, body func()) {
-	ui.Column(c).Grow(1).FillHeight().Background(colPanel).Border(1, colBorder).
-		Radius(18).Padding(16, 17).Gap(8).Children(func() {
+func miniCard(c *ui.Context, icon *ui.SVG, title string, body, footer func()) {
+	statCard(c, 1, func() {
 		ui.Row(c).AlignItems(ui.Center).Gap(7).Children(func() {
 			ui.Row(c).Width(22).Height(22).Radius(7).Background(colWash).
 				AlignItems(ui.Center).Padding(4).TextColor(colAccent).Children(func() {
@@ -743,11 +733,8 @@ func miniCard(c *ui.Context, icon *ui.SVG, title string, body func()) {
 			})
 			txt(c, title, fsSmall, true, colMuted).Grow(1)
 		})
-		// Top-aligned, not centered: the four tiles share one row, so
-		// their figures have to sit on the same baseline even when one
-		// tile's body is longer. Anything that belongs at the foot of
-		// the tile gets its own Grow spacer in the body.
-		ui.Column(c).FillWidth().Grow(1).Gap(6).Children(body)
+		ui.Column(c).FillWidth().Grow(1).Justify(ui.Center).AlignItems(ui.Center).Gap(6).Children(body)
+		ui.Column(c).FillWidth().Height(48).Justify(ui.End).Gap(4).Children(footer)
 	})
 }
 

@@ -147,9 +147,18 @@ func listCard(c *ui.Context, children func()) {
 
 // statCard is a dashboard tile: bigger radius and padding than a list,
 // because it holds a single number rather than a column of rows.
-func statCard(c *ui.Context, grow float32, children func()) {
-	ui.Column(c).Grow(grow).FillHeight().Background(colPanel).Border(1, colBorder).
-		Radius(18).Padding(17, 19).Gap(8).Children(children)
+const dashboardTileHeight = 184
+
+// Both dashboard rows use the same fractional tracks, never intrinsic flex
+// widths. Spanning two columns includes exactly one shared gutter.
+func dashboardGrid(c *ui.Context) ui.Element {
+	return ui.Grid(c).FillWidth().Columns(4).RowTracks(ui.Fixed(dashboardTileHeight)).Gap(14)
+}
+
+func statCard(c *ui.Context, span float32, children func()) ui.Element {
+	return ui.Column(c).ColumnSpan(int(span)).MinWidth(0).Height(dashboardTileHeight).
+		Background(colPanel).Border(1, colBorder).
+		Radius(18).Padding(16, 17).Gap(8).Children(children)
 }
 
 // hairline is the inset divider between list rows.
