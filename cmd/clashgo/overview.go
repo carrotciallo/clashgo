@@ -13,7 +13,7 @@ type overviewFacts struct {
 func (a *App) refreshOverviewFacts() {
 	var facts overviewFacts
 	facts.AppMemory, facts.CoreMemory = a.memUsage()
-	facts.CaptureOwned = a.px.Armed()
+	facts.CaptureOwned = a.proxyManager().Armed()
 	if master, err := a.store.LoadMaster(); err == nil {
 		facts.RuleCount = len(config.ExtractRules(master))
 	}

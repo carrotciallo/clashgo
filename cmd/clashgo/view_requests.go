@@ -53,13 +53,13 @@ func (a *App) liveToolbar(c *ui.Context) {
 		segmented(c, []string{"全部", "TCP", "UDP"}, idx, func(i int) { a.reqNet = names[i] })
 		ui.Box(c).Grow(1)
 		if iconButton(c, "断开全部连接", lucide.Eraser()).Clicked() {
-			go func() {
-				if err := a.cli.CloseAllConnections(); err != nil {
+			a.operate(func() {
+				if err := a.client().CloseAllConnections(); err != nil {
 					a.setMsg("断开失败：%v", err)
 				} else {
 					a.setMsg("已断开全部连接")
 				}
-			}()
+			})
 		}
 	})
 	ui.Box(c).Height(6)
@@ -94,11 +94,11 @@ func (a *App) liveTable(c *ui.Context, conns []core.Connection, limit int, closa
 			num(c, humanBytes(cn.Download+cn.Upload), fsSmall, false, colMuted).Width(84).TextAlign(ui.End)
 			if closable {
 				if iconButton(c, "断开此连接", lucide.X()).Clicked() {
-					go func() {
-						if err := a.cli.CloseConnection(cn.ID); err != nil {
+					a.operate(func() {
+						if err := a.client().CloseConnection(cn.ID); err != nil {
 							a.setMsg("断开失败：%v", err)
 						}
-					}()
+					})
 				}
 			} else {
 				ui.Box(c).Width(31)

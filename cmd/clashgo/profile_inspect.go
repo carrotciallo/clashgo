@@ -23,9 +23,6 @@ type ruleProviderInfo struct {
 // profileContent reads any profile's raw text (the active profile
 // is the master file itself; others sit beside it).
 func (a *App) profileContent(name string) (string, error) {
-	if name == a.set.ActiveProfile {
-		return a.store.LoadMaster()
-	}
 	b, err := os.ReadFile(a.store.ProfilePath(name))
 	return string(b), err
 }
@@ -33,9 +30,6 @@ func (a *App) profileContent(name string) (string, error) {
 // saveProfileContent writes a profile back; the active one goes
 // through SaveMaster, others are plain file writes.
 func (a *App) saveProfileContent(name, content string) error {
-	if name == a.set.ActiveProfile {
-		return a.store.SaveMaster(content)
-	}
 	return os.WriteFile(a.store.ProfilePath(name), []byte(content), 0o644)
 }
 

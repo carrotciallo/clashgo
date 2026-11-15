@@ -28,6 +28,8 @@ import (
 // App holds all mutable state. Status fields are guarded by mu and
 // written by background workers; form fields live on the UI thread.
 type App struct {
+	stateMu sync.RWMutex
+	opMu    sync.Mutex
 	store   *config.Store
 	set     config.Settings
 	reg     *subs.Registry
@@ -214,16 +216,16 @@ func (a *App) installRuntime(reload bool) error {
 	if err != nil {
 		return fmt.Errorf("读取主配置失败：%w", err)
 	}
-	rendered, err := config.RenderChecked(master, a.reg.Sources(a.store.ProvidersDir()), a.set)
+	rendered, err := config.RenderChecked(master, a.reg.Sources(a.store.ProvidersDir()), a.settings())
 	if err != nil {
 		return fmt.Errorf("渲染配置失败：%w", err)
 	}
 	var activate func(string) error
 	if reload && a.sup.Running() {
-		activate = a.cli.ReloadConfig
+		activate = a.client().ReloadConfig
 	}
 	return config.InstallRuntime(a.store.RenderedPath(), rendered, func(path string) error {
-		return core.ValidateConfig(a.coreBin, a.store.RuntimeDir(), path)
+		return core.ValidateConfig(a.corePath(), a.store.RuntimeDir(), path)
 	}, activate)
 }
 
@@ -271,28 +273,25 @@ func (a *App) applyConfigRestart() bool {
 // does not come up healthy in the new mode, the setting and the
 // running config roll back to the mode that worked before.
 func (a *App) setCapture(tun bool) {
-	go func() {
+	a.operate(func() {
 		a.setBusy(true, "切换接管方式…")
 		defer a.setBusy(false, "")
-		if tun == a.set.TUNEnabled {
+		if tun == a.settings().TUNEnabled {
 			return
 		}
 		if tun {
-			if err := core.EnsureTunCaps(a.coreBin); err != nil {
+			if err := core.EnsureTunCaps(a.corePath()); err != nil {
 				a.setMsg("TUN 需要先给核心授权：%v", err)
 				return
 			}
 		}
-		prev := a.set.TUNEnabled
-		a.set.TUNEnabled = tun
-		if err := a.store.SaveSettings(a.set); err != nil {
-			a.set.TUNEnabled = prev
+		prev := a.settings().TUNEnabled
+		if err := a.changeSettings(func(s *config.Settings) { s.TUNEnabled = tun }); err != nil {
 			a.setMsg("保存设置失败：%v", err)
 			return
 		}
 		if !a.applyConfigRestart() {
-			a.set.TUNEnabled = prev
-			_ = a.store.SaveSettings(a.set)
+			_ = a.changeSettings(func(s *config.Settings) { s.TUNEnabled = prev })
 			a.applyConfigRestart()
 			a.setMsg("切换接管方式失败，已回滚")
 			return
@@ -300,7 +299,7 @@ func (a *App) setCapture(tun bool) {
 		if !tun {
 			// An explicit switch to proxy mode arms even when the
 			// autostart preference is off — the click is the intent.
-			a.px.Arm()
+			a.proxyManager().Arm()
 		}
 		if tun {
 			a.setMsg("接管方式已切换：TUN")
@@ -308,7 +307,7 @@ func (a *App) setCapture(tun bool) {
 			a.setMsg("接管方式已切换：系统代理")
 		}
 		a.refreshTray()
-	}()
+	})
 }
 
 // startCore seeds geodata, spawns the core, waits for readiness, and
@@ -324,7 +323,7 @@ func (a *App) startCore() {
 		a.setMsg("核心启动失败：%v", err)
 		return
 	}
-	if err := a.cli.WaitReady(20 * time.Second); err != nil {
+	if err := a.client().WaitReady(20 * time.Second); err != nil {
 		a.sup.Stop()
 		a.mu.Lock()
 		a.coreOK = false
@@ -352,10 +351,10 @@ func (a *App) startCore() {
 	if a.quitting.Load() {
 		return
 	}
-	if a.set.TUNEnabled {
-		a.px.Neutralize()
-	} else if a.set.ArmProxyOnStart && !a.px.Armed() {
-		a.px.Arm()
+	if a.settings().TUNEnabled {
+		a.proxyManager().Neutralize()
+	} else if a.settings().ArmProxyOnStart && !a.proxyManager().Armed() {
+		a.proxyManager().Arm()
 	}
 	a.setMsg("")
 	a.refreshProxies()
@@ -365,7 +364,7 @@ func (a *App) startCore() {
 }
 
 func (a *App) restartCore() {
-	go func() {
+	a.operate(func() {
 		a.setBusy(true, "重启核心…")
 		a.sup.Stop()
 		for i := 0; i < 40 && a.sup.Running(); i++ {
@@ -373,7 +372,7 @@ func (a *App) restartCore() {
 		}
 		a.setBusy(false, "")
 		a.startCore()
-	}()
+	})
 }
 
 // ---- data refresh ----
@@ -382,11 +381,11 @@ func (a *App) refreshProxies() {
 	if !a.sup.Running() {
 		return
 	}
-	px, err := a.cli.Proxies()
+	px, err := a.client().Proxies()
 	if err != nil {
 		return
 	}
-	pv, _ := a.cli.Providers() // best-effort; sections fall back gracefully
+	pv, _ := a.client().Providers() // best-effort; sections fall back gracefully
 	a.mu.Lock()
 	a.proxies = px
 	if pv != nil {
@@ -404,7 +403,7 @@ func (a *App) refreshMode() {
 	if !a.sup.Running() {
 		return
 	}
-	m, err := a.cli.ConfigMode()
+	m, err := a.client().ConfigMode()
 	if err != nil || m == "" {
 		return
 	}
@@ -414,8 +413,8 @@ func (a *App) refreshMode() {
 }
 
 func (a *App) setMode(m string) {
-	go func() {
-		if err := a.cli.SetMode(m); err != nil {
+	a.operate(func() {
+		if err := a.client().SetMode(m); err != nil {
 			a.setMsg("切换模式失败：%v", err)
 			return
 		}
@@ -424,7 +423,7 @@ func (a *App) setMode(m string) {
 		a.mu.Unlock()
 		a.setMsg("出站模式：%s", modeLabel(m))
 		a.refreshEgress()
-	}()
+	})
 }
 
 func modeLabel(m string) string {
@@ -454,10 +453,13 @@ func (a *App) requestQuit() {
 }
 
 func (a *App) refreshEgress() {
-	go func() {
-		tr := &http.Transport{Proxy: http.ProxyURL(&url.URL{Scheme: "http", Host: fmt.Sprintf("127.0.0.1:%d", a.set.MixedPort)})}
+	a.operate(func() {
+		port := a.settings().MixedPort
+		tr := &http.Transport{Proxy: http.ProxyURL(&url.URL{Scheme: "http", Host: fmt.Sprintf("127.0.0.1:%d", port)})}
 		cl := &http.Client{Transport: tr, Timeout: 15 * time.Second}
-		resp, err := cl.Get("https://www.cloudflare.com/cdn-cgi/trace")
+		defer cl.CloseIdleConnections()
+		req, _ := http.NewRequestWithContext(a.appContext(), http.MethodGet, "https://www.cloudflare.com/cdn-cgi/trace", nil)
+		resp, err := cl.Do(req)
 		if err != nil {
 			return
 		}
@@ -485,7 +487,7 @@ func (a *App) refreshEgress() {
 				}
 			}
 		}
-	}()
+	})
 }
 
 // fetchEgressOrg resolves the organization (ISP / AS name)
@@ -528,107 +530,120 @@ func (a *App) pollLoop(ctx context.Context) {
 			return
 		case <-t.C:
 		}
-		a.mu.Lock()
-		open, ok := a.windowOpen, a.coreOK
-		a.mu.Unlock()
-		if ok && !a.sup.Running() {
-			a.mu.Lock()
-			a.coreOK = false
-			a.coreErr = "核心进程已退出"
-			a.mu.Unlock()
-			ok = false
-		}
-		if open {
-			a.refreshOverviewFacts()
-		}
-		if !open || !ok {
+		if !a.opMu.TryLock() {
 			continue
 		}
-		sample, sampleErr := a.cli.ConnectionsSnapshot()
-		if sampleErr == nil {
-			up, down := sample.UploadTotal, sample.DownloadTotal
-			now := time.Now()
-			a.mu.Lock()
-			if !a.prevSample.IsZero() {
-				if dt := now.Sub(a.prevSample).Seconds(); dt > 0 {
-					a.upRate = int64(float64(up-a.prevUp) / dt)
-					a.downRate = int64(float64(down-a.prevDown) / dt)
-					if a.upRate > a.maxUpRate {
-						a.maxUpRate = a.upRate
-					}
-					if a.downRate > a.maxDownRate {
-						a.maxDownRate = a.downRate
-					}
-					if a.upRate < 0 {
-						a.upRate = 0
-					}
-					if a.downRate < 0 {
-						a.downRate = 0
-					}
+		a.pollTick(&ticks)
+		a.opMu.Unlock()
+	}
+}
+
+func (a *App) pollTick(ticks *int) {
+	a.mu.Lock()
+	open, ok := a.windowOpen, a.coreOK
+	a.mu.Unlock()
+	if ok && !a.sup.Running() {
+		a.mu.Lock()
+		a.coreOK = false
+		a.coreErr = "核心进程已退出"
+		a.mu.Unlock()
+		ok = false
+	}
+	if open {
+		a.refreshOverviewFacts()
+	}
+	if !open || !ok {
+		return
+	}
+	sample, sampleErr := a.client().ConnectionsSnapshot()
+	if sampleErr == nil {
+		up, down := sample.UploadTotal, sample.DownloadTotal
+		now := time.Now()
+		a.mu.Lock()
+		if !a.prevSample.IsZero() {
+			if dt := now.Sub(a.prevSample).Seconds(); dt > 0 {
+				a.upRate = int64(float64(up-a.prevUp) / dt)
+				a.downRate = int64(float64(down-a.prevDown) / dt)
+				if a.upRate > a.maxUpRate {
+					a.maxUpRate = a.upRate
+				}
+				if a.downRate > a.maxDownRate {
+					a.maxDownRate = a.downRate
+				}
+				if a.upRate < 0 {
+					a.upRate = 0
+				}
+				if a.downRate < 0 {
+					a.downRate = 0
 				}
 			}
-			a.prevUp, a.prevDown, a.prevSample = up, down, now
-			a.up, a.down = up, down
+		}
+		a.prevUp, a.prevDown, a.prevSample = up, down, now
+		a.up, a.down = up, down
+		a.mu.Unlock()
+	}
+	if sampleErr == nil {
+		conns := sample.Connections
+		// Drop the core's own plumbing connections (dialer
+		// tunnels have no user-meaningful exit).
+		kept := conns[:0]
+		for _, cn := range conns {
+			if cn.Exit() != "" {
+				kept = append(kept, cn)
+			}
+		}
+		sort.Slice(kept, func(i, j int) bool { return kept[i].Start.After(kept[j].Start) })
+		a.mu.Lock()
+		cur := make(map[string]core.Connection, len(kept))
+		for _, cn := range kept {
+			if cn.ID != "" {
+				cur[cn.ID] = cn
+			}
+		}
+		for id, old := range a.prevConnIDs {
+			if _, ok := cur[id]; !ok {
+				a.recent = append([]recentConn{{Connection: old, ClosedAt: time.Now()}}, a.recent...)
+			}
+		}
+		if len(a.recent) > 60 {
+			a.recent = a.recent[:60]
+		}
+		a.prevConnIDs = cur
+		a.conns = kept
+		a.mu.Unlock()
+	}
+	(*ticks)++
+	if *ticks%15 == 0 {
+		// Capture watchdog: while we own the system proxy,
+		// take it back if another app grabbed it (the launch
+		// grab cuts both ways — see sysproxy.Reassert).
+		a.proxyManager().Reassert()
+		a.refreshEgress()
+		a.refreshProxies()
+		a.refreshMode()
+		if rtt, err := a.client().Ping(); err == nil {
+			a.mu.Lock()
+			a.coreRTT = rtt
 			a.mu.Unlock()
 		}
-		if sampleErr == nil {
-			conns := sample.Connections
-			// Drop the core's own plumbing connections (dialer
-			// tunnels have no user-meaningful exit).
-			kept := conns[:0]
-			for _, cn := range conns {
-				if cn.Exit() != "" {
-					kept = append(kept, cn)
-				}
-			}
-			sort.Slice(kept, func(i, j int) bool { return kept[i].Start.After(kept[j].Start) })
+		if ip := lanIP(); ip != "" {
 			a.mu.Lock()
-			cur := make(map[string]core.Connection, len(kept))
-			for _, cn := range kept {
-				if cn.ID != "" {
-					cur[cn.ID] = cn
-				}
-			}
-			for id, old := range a.prevConnIDs {
-				if _, ok := cur[id]; !ok {
-					a.recent = append([]recentConn{{Connection: old, ClosedAt: time.Now()}}, a.recent...)
-				}
-			}
-			if len(a.recent) > 60 {
-				a.recent = a.recent[:60]
-			}
-			a.prevConnIDs = cur
-			a.conns = kept
+			a.localIP = ip
 			a.mu.Unlock()
 		}
-		ticks++
-		if ticks%15 == 0 {
-			// Capture watchdog: while we own the system proxy,
-			// take it back if another app grabbed it (the launch
-			// grab cuts both ways — see sysproxy.Reassert).
-			a.px.Reassert()
-			a.refreshEgress()
-			a.refreshProxies()
-			a.refreshMode()
-			if rtt, err := a.cli.Ping(); err == nil {
-				a.mu.Lock()
-				a.coreRTT = rtt
-				a.mu.Unlock()
-			}
-			if ip := lanIP(); ip != "" {
-				a.mu.Lock()
-				a.localIP = ip
-				a.mu.Unlock()
-			}
-			if gw := lanGateway(); gw != "" {
-				a.mu.Lock()
-				a.gateway = gw
-				a.mu.Unlock()
-			}
-			if !a.svcRan && a.coreHealthy() {
-				a.svcRan = true
-				go a.checkServices()
-			}
+		if gw := lanGateway(); gw != "" {
+			a.mu.Lock()
+			a.gateway = gw
+			a.mu.Unlock()
+		}
+		a.mu.Lock()
+		run := !a.svcRan && a.coreOK
+		if run {
+			a.svcRan = true
+		}
+		a.mu.Unlock()
+		if run {
+			a.operate(a.checkServices)
 		}
 	}
 }
@@ -636,7 +651,7 @@ func (a *App) pollLoop(ctx context.Context) {
 // ---- actions used by views ----
 
 func (a *App) toggleCapture() {
-	a.setCapture(!a.set.TUNEnabled)
+	a.setCapture(!a.settings().TUNEnabled)
 }
 
 func (a *App) coreHealthy() bool {
@@ -646,8 +661,8 @@ func (a *App) coreHealthy() bool {
 }
 
 func (a *App) switchNode(group, name string) {
-	go func() {
-		if err := a.cli.Switch(group, name); err != nil {
+	a.operate(func() {
+		if err := a.client().Switch(group, name); err != nil {
 			a.setMsg("切换失败：%v", err)
 			return
 		}
@@ -655,14 +670,14 @@ func (a *App) switchNode(group, name string) {
 		a.refreshProxies()
 		time.Sleep(600 * time.Millisecond)
 		a.refreshEgress()
-	}()
+	})
 }
 
 func (a *App) testDelay(group string) {
-	go func() {
+	a.operate(func() {
 		a.setBusy(true, "测速中…")
 		defer a.setBusy(false, "")
-		res, err := a.cli.GroupDelay(group, "https://www.gstatic.com/generate_204", 5000)
+		res, err := a.client().GroupDelay(group, "https://www.gstatic.com/generate_204", 5000)
 		if err != nil {
 			a.setMsg("测速失败：%v", err)
 			return
@@ -674,14 +689,14 @@ func (a *App) testDelay(group string) {
 		a.delays[group] = res
 		a.mu.Unlock()
 		a.setMsg("%s 测速完成", group)
-	}()
+	})
 }
 
 // testNodeDelay measures one node and files the result in the
 // 节点选择 delay table the node rows already read (0 = timeout).
 func (a *App) testNodeDelay(provider, name string) {
-	go func() {
-		d, err := a.cli.ProviderDelay(provider, name, "https://www.gstatic.com/generate_204", 5000)
+	a.operate(func() {
+		d, err := a.client().ProviderDelay(provider, name, "https://www.gstatic.com/generate_204", 5000)
 		a.mu.Lock()
 		if a.delays == nil {
 			a.delays = map[string]map[string]int{}
@@ -698,7 +713,7 @@ func (a *App) testNodeDelay(provider, name string) {
 		if err != nil {
 			a.setMsg("测速失败：%v", err)
 		}
-	}()
+	})
 }
 
 // toggleCore is the dashboard's big start/stop button. Stopping in
@@ -706,10 +721,10 @@ func (a *App) testNodeDelay(provider, name string) {
 // dead port; in TUN mode the parked (direct) settings already mean
 // "no proxy", and startCore re-applies the capture on the way back.
 func (a *App) toggleCore() {
-	go func() {
+	a.operate(func() {
 		if a.sup.Running() {
-			if !a.set.TUNEnabled {
-				a.px.Disarm()
+			if !a.settings().TUNEnabled {
+				a.proxyManager().Disarm()
 			}
 			a.sup.Stop()
 			a.mu.Lock()
@@ -721,7 +736,7 @@ func (a *App) toggleCore() {
 			return
 		}
 		a.startCore()
-	}()
+	})
 }
 
 // lanIP returns the primary LAN address: the first IPv4 on a
@@ -876,12 +891,12 @@ func (a *App) useNode(name string) {
 		}
 		if contains(g.All, name) && contains(picker.All, gname) {
 			gname := gname
-			go func() {
-				if err := a.cli.Switch(gname, name); err != nil {
+			a.operate(func() {
+				if err := a.client().Switch(gname, name); err != nil {
 					a.setMsg("切换失败：%v", err)
 					return
 				}
-				if err := a.cli.Switch("节点选择", gname); err != nil {
+				if err := a.client().Switch("节点选择", gname); err != nil {
 					a.setMsg("切换失败：%v", err)
 					return
 				}
@@ -889,7 +904,7 @@ func (a *App) useNode(name string) {
 				a.refreshProxies()
 				time.Sleep(600 * time.Millisecond)
 				a.refreshEgress()
-			}()
+			})
 			return
 		}
 	}
@@ -902,25 +917,22 @@ func (a *App) useNode(name string) {
 // applies it. A render failure reverts the switch completely — the
 // running core and the persisted choice both stay on the old file.
 func (a *App) switchProfile(name string) {
-	if name == a.set.ActiveProfile {
-		return
-	}
-	go func() {
+	a.operate(func() {
+		if name == a.settings().ActiveProfile {
+			return
+		}
 		a.setBusy(true, "切换配置…")
 		defer a.setBusy(false, "")
-		old := a.set.ActiveProfile
-		a.set.ActiveProfile = name
+		old := a.settings().ActiveProfile
 		a.store.SetActiveProfile(name)
-		if err := a.store.SaveSettings(a.set); err != nil {
-			a.set.ActiveProfile = old
+		if err := a.changeSettings(func(s *config.Settings) { s.ActiveProfile = name }); err != nil {
 			a.store.SetActiveProfile(old)
 			a.setMsg("保存配置选择失败：%v", err)
 			return
 		}
 		if err := a.renderAndInstall(); err != nil {
-			a.set.ActiveProfile = old
 			a.store.SetActiveProfile(old)
-			_ = a.store.SaveSettings(a.set)
+			_ = a.changeSettings(func(s *config.Settings) { s.ActiveProfile = old })
 			a.setMsg("配置未切换，新配置校验不过：%v", err)
 			return
 		}
@@ -935,12 +947,11 @@ func (a *App) switchProfile(name string) {
 		}
 		a.setMsg("已切换到配置「%s」", profileDisplayName(name))
 		a.refreshProxies()
-	}()
+	})
 }
 
 func (a *App) setDefaultProfile(name string) {
-	a.set.DefaultProfile = name
-	if err := a.store.SaveSettings(a.set); err != nil {
+	if err := a.changeSettings(func(s *config.Settings) { s.DefaultProfile = name }); err != nil {
 		a.setMsg("保存默认配置失败：%v", err)
 		return
 	}
@@ -983,7 +994,7 @@ func (a *App) restoreDefaultProfile() {
 		a.setMsg("恢复默认配置失败：%v", err)
 		return
 	}
-	if a.set.ActiveProfile == name {
+	if a.settings().ActiveProfile == name {
 		if err := a.store.SaveMaster(config.DefaultMaster); err != nil {
 			a.setMsg("恢复默认配置失败：%v", err)
 			return
@@ -1016,7 +1027,7 @@ func (a *App) duplicateProfile(name string) {
 // exportProfile copies a profile file to a user-chosen path.
 func (a *App) exportProfile(name string) {
 	path := a.store.ProfilePath(name)
-	pickSaveFile("导出配置", profileDisplayName(name)+".yaml", func(dst string) {
+	a.pickSaveFile("导出配置", profileDisplayName(name)+".yaml", func(dst string) {
 		data, err := os.ReadFile(path)
 		if err == nil {
 			err = os.WriteFile(dst, data, 0o644)
@@ -1033,11 +1044,11 @@ func (a *App) exportProfile(name string) {
 // editor (编辑纯文本）.
 func (a *App) openProfileText(name string) {
 	path := a.store.ProfilePath(name)
-	go func() {
+	a.launch(func() {
 		if err := exec.Command("xdg-open", path).Start(); err != nil {
 			a.setMsg("打开编辑器失败：%v", err)
 		}
-	}()
+	})
 }
 
 // subCollapsed reports whether a subscription's node list is
@@ -1060,8 +1071,7 @@ func (a *App) toggleSubCollapsed(name string) {
 		}
 	}
 	sort.Strings(list)
-	a.set.CollapsedSubs = list
-	if err := a.store.SaveSettings(a.set); err != nil {
+	if err := a.changeSettings(func(s *config.Settings) { s.CollapsedSubs = list }); err != nil {
 		a.setMsg("保存折叠状态失败：%v", err)
 	}
 }
@@ -1072,7 +1082,7 @@ func (a *App) cfgTarget() string {
 	if a.cfgOpen {
 		return a.cfgDetail
 	}
-	return a.set.ActiveProfile
+	return a.settings().ActiveProfile
 }
 
 // replacePolicy rewrites every rule in the target profile whose
@@ -1113,7 +1123,7 @@ func (a *App) replacePolicy() {
 		return
 	}
 	a.setMsg("已把 %d 条规则的策略 %s 换成 %s", n, from, to)
-	if name == a.set.ActiveProfile {
+	if name == a.settings().ActiveProfile {
 		a.applyConfig()
 	}
 }
@@ -1148,11 +1158,11 @@ func (a *App) runTestRule() {
 // report stays in the dialog so nothing the converter dropped or
 // approximated is silent.
 func (a *App) importConfig() {
-	go func() {
-		text := a.impText
-		if u := strings.TrimSpace(a.impURL); u != "" {
+	text, u, name := a.impText, strings.TrimSpace(a.impURL), strings.TrimSpace(a.impName)
+	a.operate(func() {
+		if u != "" {
 			a.setBusy(true, "拉取配置…")
-			body, err := fetchText(u)
+			body, err := fetchText(a.appContext(), u)
 			a.setBusy(false, "")
 			if err != nil {
 				a.setMsg("拉取配置失败：%v", err)
@@ -1169,7 +1179,6 @@ func (a *App) importConfig() {
 			a.setMsg("导入失败：%v", err)
 			return
 		}
-		name := strings.TrimSpace(a.impName)
 		if name == "" {
 			name = "Shadowrocket 导入"
 		}
@@ -1177,19 +1186,18 @@ func (a *App) importConfig() {
 			a.setMsg("导入失败：%v", err)
 			return
 		}
-		r := rep
-		a.mu.Lock()
-		a.impReport = &r
-		a.impNameUsed = name
-		a.mu.Unlock()
-		a.impText, a.impURL = "", ""
+		a.onUI(func() {
+			a.impReport = &rep
+			a.impNameUsed = name
+			a.impText, a.impURL = "", ""
+		})
 		a.setMsg("已导入配置「%s」（未切换）", name)
-	}()
+	})
 }
 
 // fetchText GETs a config file for the import dialog.
-func fetchText(rawURL string) (string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+func fetchText(parent context.Context, rawURL string) (string, error) {
+	ctx, cancel := context.WithTimeout(parent, 30*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
@@ -1212,11 +1220,11 @@ func fetchText(rawURL string) (string, error) {
 }
 
 func (a *App) deleteProfile(name string) {
-	if name == a.set.ActiveProfile {
+	if name == a.settings().ActiveProfile {
 		a.setMsg("正在使用的配置不能删除，先切到别的配置")
 		return
 	}
-	if name == a.set.DefaultProfile {
+	if name == a.settings().DefaultProfile {
 		a.setMsg("默认配置不能删除，先改默认")
 		return
 	}
@@ -1255,7 +1263,7 @@ func (a *App) addSubscription() {
 		} else {
 			body = []byte(a.subText)
 		}
-		go func() {
+		a.operate(func() {
 			if err := a.reg.AddLocal(name); err != nil {
 				a.setMsg("添加订阅失败：%v", err)
 				return
@@ -1268,22 +1276,22 @@ func (a *App) addSubscription() {
 			if sub == nil {
 				return
 			}
-			a.subName, a.subText, a.subFile = "", "", ""
+			a.onUI(func() { a.subName, a.subText, a.subFile = "", "", "" })
 			a.setMsg("订阅 %s 已添加（%d 个节点），应用配置…", name, sub.NodeCount)
 			a.applyConfig()
-		}()
+		})
 		return
 	}
 	rawURL := strings.TrimSpace(a.subURL)
-	go func() {
+	a.operate(func() {
 		if err := a.reg.Add(name, rawURL); err != nil {
 			a.setMsg("添加订阅失败：%v", err)
 			return
 		}
-		a.subName, a.subURL = "", ""
+		a.onUI(func() { a.subName, a.subURL = "", "" })
 		a.setMsg("订阅 %s 已添加，抓取中…", name)
 		a.fetchSubscription(name, true)
-	}()
+	})
 }
 
 func (a *App) fetchSubscription(name string, reRender bool) {
@@ -1297,7 +1305,7 @@ func (a *App) fetchSubscription(name string, reRender bool) {
 	}
 	a.setBusy(true, "抓取订阅 "+name+"…")
 	defer a.setBusy(false, "")
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	ctx, cancel := context.WithTimeout(a.appContext(), 60*time.Second)
 	defer cancel()
 	if err := a.reg.Fetch(ctx, name, a.store.ProvidersDir()); err != nil {
 		a.setMsg("订阅 %s 刷新失败（旧节点保留）：%v", name, err)
@@ -1313,7 +1321,7 @@ func (a *App) fetchSubscription(name string, reRender bool) {
 		a.setMsg("订阅 %s 已更新（%d 个节点），应用配置…", name, sub.NodeCount)
 		a.applyConfig()
 	} else if a.sup.Running() {
-		if err := a.cli.UpdateProvider(name); err != nil {
+		if err := a.client().UpdateProvider(name); err != nil {
 			a.setMsg("订阅 %s 已更新（%d 个节点），但核心重载 provider 失败：%v", name, sub.NodeCount, err)
 			return
 		}
@@ -1335,10 +1343,12 @@ func (a *App) applyQRCode(s string) {
 	a.setMsg("二维码内容不是订阅链接")
 }
 
-func (a *App) refreshSubscription(name string) { go a.fetchSubscription(name, false) }
+func (a *App) refreshSubscription(name string) {
+	a.operate(func() { a.fetchSubscription(name, false) })
+}
 
 func (a *App) removeSubscription(name string) {
-	go func() {
+	a.operate(func() {
 		if err := a.reg.Remove(name); err != nil {
 			a.setMsg("删除失败：%v", err)
 			return
@@ -1346,7 +1356,7 @@ func (a *App) removeSubscription(name string) {
 		_ = os.Remove(filepath.Join(a.store.ProvidersDir(), name+".yaml"))
 		a.setMsg("订阅 %s 已删除", name)
 		a.applyConfig()
-	}()
+	})
 }
 
 func (a *App) ruleTargets() []string {
@@ -1371,7 +1381,7 @@ func (a *App) addRule() {
 	typ := ruleTypes[a.ruleTypeIdx]
 	targets := a.ruleTargets()
 	target := targets[a.ruleTargetIdx%len(targets)]
-	go func() {
+	a.operate(func() {
 		master, err := a.store.LoadMaster()
 		if err != nil {
 			a.setMsg("读主配置失败：%v", err)
@@ -1398,14 +1408,14 @@ func (a *App) addRule() {
 			a.setMsg("保存规则失败：%v", err)
 			return
 		}
-		a.ruleValue = ""
+		a.onUI(func() { a.ruleValue = "" })
 		a.setMsg("规则已添加：%s", rule)
 		a.applyConfig()
-	}()
+	})
 }
 
 func (a *App) deleteRule(idx int) {
-	go func() {
+	a.operate(func() {
 		master, err := a.store.LoadMaster()
 		if err != nil {
 			a.setMsg("读主配置失败：%v", err)
@@ -1423,15 +1433,15 @@ func (a *App) deleteRule(idx int) {
 		}
 		a.setMsg("规则已删除：%s", removed)
 		a.applyConfig()
-	}()
+	})
 }
 
 func (a *App) shutdown() {
 	if a.work != nil {
 		a.work.Wait()
 	}
-	a.px.Disarm()
-	a.px.EndSession()
+	a.proxyManager().Disarm()
+	a.proxyManager().EndSession()
 	a.sup.Stop()
 	if a.tray != nil {
 		a.tray.Destroy()

@@ -171,7 +171,7 @@ func (a *App) dialogs(c *ui.Context) {
 		case 1:
 			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
 				if iconButton(c, "选择订阅文件", lucide.FolderOpen()).Clicked() {
-					pickFile("选择订阅文件", func(path string) { a.subFile = path })
+					a.pickFile("选择订阅文件", func(path string) { a.subFile = path })
 				}
 				name := a.subFile
 				if name == "" {
@@ -186,22 +186,10 @@ func (a *App) dialogs(c *ui.Context) {
 		case 3:
 			ui.Row(c).Gap(8).Children(func() {
 				if ov.Button(c, "从图片文件识别", ov.ButtonOutline).Clicked() {
-					pickFile("选择二维码图片", func(path string) {
-						if s, err := decodeQRImage(path); err == nil {
-							a.applyQRCode(s)
-						} else {
-							a.setMsg("%v", err)
-						}
-					})
+					a.pickFile("选择二维码图片", a.readQR)
 				}
 				if ov.Button(c, "从剪贴板图片识别", ov.ButtonOutline).Clicked() {
-					go func() {
-						if s, err := decodeQRClipboard(); err == nil {
-							a.applyQRCode(s)
-						} else {
-							a.setMsg("%v", err)
-						}
-					}()
+					a.readQR("")
 				}
 			})
 		default:
@@ -273,7 +261,7 @@ func (a *App) dialogs(c *ui.Context) {
 		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
 			txt(c, "或把 .conf 内容整份粘贴进来（只贴 [Rule] 段也行）：", fsSmall, false, colFaint).Grow(1)
 			if iconButton(c, "从文件读入", lucide.FileUp()).Clicked() {
-				pickFile("选择 Shadowrocket 配置", func(path string) {
+				a.pickFile("选择 Shadowrocket 配置", func(path string) {
 					if b, err := os.ReadFile(path); err == nil {
 						a.impText = string(b)
 						if strings.TrimSpace(a.impName) == "" {
@@ -450,7 +438,7 @@ func (a *App) pageOverview(c *ui.Context) {
 						}
 						statusPill(c, state, dotCol)
 						ui.Box(c).Grow(1)
-						txt(c, fmt.Sprintf("mihomo · 127.0.0.1:%d", a.set.MixedPort), fsMicro, false, colFaint).SingleLine()
+						txt(c, fmt.Sprintf("mihomo · 127.0.0.1:%d", a.settings().MixedPort), fsMicro, false, colFaint).SingleLine()
 					})
 					ui.Box(c).Grow(1)
 					// The headline names the node traffic is actually leaving
@@ -549,11 +537,11 @@ func (a *App) pageOverview(c *ui.Context) {
 			// independent toggles.
 			txt(c, "接管方式", fsSmall, true, colMuted)
 			capIdx := 0
-			if a.set.TUNEnabled {
+			if a.settings().TUNEnabled {
 				capIdx = 1
 			}
 			segmented(c, []string{"系统代理", "虚拟网卡"}, capIdx, func(i int) {
-				if want := i == 1; want != a.set.TUNEnabled {
+				if want := i == 1; want != a.settings().TUNEnabled {
 					a.setCapture(want)
 				}
 			})
@@ -571,17 +559,17 @@ func (a *App) pageOverview(c *ui.Context) {
 				num(c, lan, fsMetric, true, colText).LetterSpacing(-0.3).SingleLine()
 			}
 		}, func() {
-			caption(c, fmt.Sprintf("混合 %d · 控制 %d", a.set.MixedPort, a.set.ControllerPort))
+			caption(c, fmt.Sprintf("混合 %d · 控制 %d", a.settings().MixedPort, a.settings().ControllerPort))
 			sub, tone := "未接管", colFaint
-			if a.set.TUNEnabled {
+			if a.settings().TUNEnabled {
 				sub, tone = "虚拟网卡接管中", colOK
 			} else if facts.CaptureOwned {
-				sub, tone = fmt.Sprintf("系统代理 127.0.0.1:%d", a.set.MixedPort), colOK
+				sub, tone = fmt.Sprintf("系统代理 127.0.0.1:%d", a.settings().MixedPort), colOK
 			}
 			txt(c, sub, fsMicro, false, tone).SingleLine()
 		})
 		miniCard(c, lucide.ScrollText(), "配置", func() {
-			txt(c, profileDisplayName(a.set.ActiveProfile), fsValue, true, colText).SingleLine()
+			txt(c, profileDisplayName(a.settings().ActiveProfile), fsValue, true, colText).SingleLine()
 			rules := fmt.Sprintf("%d 条规则", facts.RuleCount)
 			caption(c, fmt.Sprintf("%d 个订阅 · %s", len(a.reg.Snapshot()), rules))
 		}, func() {
@@ -618,7 +606,7 @@ func (a *App) pageOverview(c *ui.Context) {
 				})
 				txt(c, "服务状态", fsSmall, true, colMuted).Grow(1)
 				if iconButton(c, "重新检测", lucide.Zap()).Clicked() {
-					go a.checkServices()
+					a.operate(a.checkServices)
 				}
 			})
 			ui.Box(c).Grow(1)

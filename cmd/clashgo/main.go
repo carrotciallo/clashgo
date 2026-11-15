@@ -173,6 +173,8 @@ func main() {
 // fast operation; without them the core tries to fetch providers
 // during validation and can stall on a slow airport.
 func (a *App) bootstrap(ctx context.Context) {
+	a.opMu.Lock()
+	defer a.opMu.Unlock()
 	if a.healed {
 		a.setMsg("已修复上次异常退出留下的系统代理")
 	}

@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"time"
 
+	"github.com/carrotciallo/clashgo/internal/config"
 	"github.com/carrotciallo/clashgo/internal/core"
 	"github.com/carrotciallo/clashgo/internal/sysproxy"
 	"github.com/egoist/mygo/ui"
@@ -29,14 +29,12 @@ func (a *App) pageSettings(c *ui.Context) {
 
 	sectionHeader(c, "核心", "")
 	listCard(c, func() {
-		navRow(c, lucide.Settings(), "核心设置", fmt.Sprintf("%d · %d", a.set.MixedPort, a.set.ControllerPort), false, func() {
+		navRow(c, lucide.Settings(), "核心设置", fmt.Sprintf("%d · %d", a.settings().MixedPort, a.settings().ControllerPort), false, func() {
 			a.setCorePage = true
 		})
 		hairline(c)
 		actionRow(c, "立即恢复系统代理", lucide.RotateCcw(), false, func() {
-			a.px.Disarm()
-			a.setMsg("系统代理已恢复为接管前设置")
-			a.refreshTray()
+			a.operate(a.restoreProxy)
 		})
 	})
 
@@ -57,10 +55,10 @@ func (a *App) pageSettings(c *ui.Context) {
 			}
 		}
 		hairline(c)
-		switchRow(c, lucide.Moon(), "自启时静默启动（只进托盘，不弹窗口）", &a.set.SilentAutostart)
-		if a.set.SilentAutostart != a.silentSaved {
-			a.silentSaved = a.set.SilentAutostart
-			if err := a.store.SaveSettings(a.set); err != nil {
+		silent := a.settings().SilentAutostart
+		switchRow(c, lucide.Moon(), "自启时静默启动（只进托盘，不弹窗口）", &silent)
+		if silent != a.settings().SilentAutostart {
+			if err := a.changeSettings(func(s *config.Settings) { s.SilentAutostart = silent }); err != nil {
 				a.setMsg("保存静默启动设置失败：%v", err)
 			} else {
 				a.setMsg("静默启动设置已保存")
@@ -72,7 +70,7 @@ func (a *App) pageSettings(c *ui.Context) {
 	listCard(c, func() {
 		iconPathRow(c, lucide.ScrollText(), "主配置", a.store.MasterPath())
 		hairline(c)
-		iconPathRow(c, lucide.Cpu(), "核心", a.coreBin)
+		iconPathRow(c, lucide.Cpu(), "核心", a.corePath())
 		hairline(c)
 		iconPathRow(c, lucide.FolderCog(), "状态目录", a.store.StateDir)
 		hairline(c)
@@ -119,9 +117,7 @@ func (a *App) pageCoreSettings(c *ui.Context) {
 		ui.Row(c).FillWidth().Padding(12, 16).Gap(8).Children(func() {
 			ui.Box(c).Grow(1)
 			if ov.Button(c, "立即恢复系统代理", ov.ButtonOutline).Clicked() {
-				a.px.Disarm()
-				a.setMsg("系统代理已恢复为接管前设置")
-				a.refreshTray()
+				a.operate(a.restoreProxy)
 			}
 			if ov.Button(c, "保存并应用", ov.ButtonPrimary).Clicked() {
 				a.saveSettings()
@@ -163,57 +159,61 @@ func pathRow(c *ui.Context, label, value string) {
 	})
 }
 
+func (a *App) restoreProxy() {
+	a.proxyManager().Disarm()
+	a.setMsg("系统代理已恢复为接管前设置")
+	a.refreshTray()
+}
+
 func (a *App) saveSettings() {
 	mixed, err1 := strconv.Atoi(strings.TrimSpace(a.setMixed))
 	ctrl, err2 := strconv.Atoi(strings.TrimSpace(a.setCtrl))
-	if err1 != nil || err2 != nil || mixed < 1 || mixed > 65535 || ctrl < 1 || ctrl > 65535 {
-		a.setMsg("端口不合法")
+	if err1 != nil || err2 != nil || mixed < 1 || mixed > 65535 || ctrl < 1 || ctrl > 65535 || mixed == ctrl {
+		a.setMsg("端口不合法或相同")
 		return
 	}
-	go func() {
-		portsChanged := mixed != a.set.MixedPort || ctrl != a.set.ControllerPort
-		wasArmed := a.px.Armed()
-		if portsChanged && wasArmed {
-			a.px.Disarm()
+	// Capture form values on the UI thread, never from the worker.
+	path, arm := strings.TrimSpace(a.setCorePath), a.setArm
+	a.operate(func() {
+		bin := core.FindCore(path)
+		if bin == "" {
+			a.setMsg("核心路径不可用")
+			return
 		}
-		a.set.MixedPort = mixed
-		a.set.ControllerPort = ctrl
-		a.set.CorePath = strings.TrimSpace(a.setCorePath)
-		a.set.ArmProxyOnStart = a.setArm
-		if err := a.store.SaveSettings(a.set); err != nil {
+		old := a.settings()
+		changed := mixed != old.MixedPort || ctrl != old.ControllerPort || bin != a.corePath()
+		if err := a.changeSettings(func(s *config.Settings) {
+			s.MixedPort, s.ControllerPort, s.CorePath, s.ArmProxyOnStart = mixed, ctrl, path, arm
+		}); err != nil {
 			a.setMsg("保存设置失败：%v", err)
 			return
 		}
-		if bin := core.FindCore(a.set.CorePath); bin != "" {
-			a.coreBin = bin
-			a.sup.BinPath = bin
-		}
-		// Rebuild controller-dependent pieces for the new ports.
-		a.cli = core.NewClient(fmt.Sprintf("http://127.0.0.1:%d", a.set.ControllerPort), a.set.ControllerSecret)
-		a.px = sysproxy.New(a.store.StateDir, a.set.MixedPort)
-		a.px.BeginSession()
-		a.setMsg("设置已保存")
-		if portsChanged {
-			a.setMsg("端口已变更，重启核心并重新应用配置…")
+		if changed {
+			px := a.proxyManager()
+			wasArmed := px.Armed()
+			px.Disarm()
 			a.sup.Stop()
-			for i := 0; i < 40 && a.sup.Running(); i++ {
-				time.Sleep(100 * time.Millisecond)
+			if err := a.sup.SetBinary(bin); err != nil {
+				a.setMsg("切换核心失败：%v", err)
+				return
 			}
+			next := a.settings()
+			a.stateMu.Lock()
+			a.coreBin = bin
+			a.cli = core.NewClient(fmt.Sprintf("http://127.0.0.1:%d", ctrl), next.ControllerSecret)
+			a.px = sysproxy.New(a.store.StateDir, mixed)
+			a.stateMu.Unlock()
+			a.proxyManager().BeginSession()
 			a.mu.Lock()
 			a.coreOK = false
 			a.mu.Unlock()
-			a.applyConfig() // starts the core again; arms if ArmProxyOnStart
-			if wasArmed && !a.set.ArmProxyOnStart {
-				for i := 0; i < 100 && !a.coreHealthy(); i++ {
-					time.Sleep(200 * time.Millisecond)
-				}
-				if a.coreHealthy() {
-					a.px.Arm()
-				}
+			a.applyConfig()
+			if wasArmed && !next.TUNEnabled && a.coreHealthy() {
+				a.proxyManager().Arm()
 			}
 		}
 		a.refreshTray()
-	}()
+	})
 }
 
 func autostartUnitPath() string {

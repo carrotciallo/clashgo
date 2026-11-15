@@ -27,7 +27,7 @@ func (a *App) pageServices(c *ui.Context) {
 			a.svcManage = !a.svcManage
 		}
 		if iconButton(c, "重新检测", lucide.Zap()).Clicked() {
-			go a.checkServices()
+			a.operate(a.checkServices)
 		}
 	})
 

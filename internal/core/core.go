@@ -86,6 +86,17 @@ func (s *Supervisor) Stop() {
 	}
 }
 
+// SetBinary changes the executable only between child lifetimes.
+func (s *Supervisor) SetBinary(path string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.cmd != nil {
+		return fmt.Errorf("core already running")
+	}
+	s.BinPath = path
+	return nil
+}
+
 func (s *Supervisor) Running() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()

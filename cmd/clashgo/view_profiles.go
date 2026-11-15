@@ -121,8 +121,8 @@ func (a *App) pageProfiles(c *ui.Context) {
 			if i > 0 {
 				hairline(c)
 			}
-			active := p.Name == a.set.ActiveProfile
-			isDefault := p.Name == a.set.DefaultProfile
+			active := p.Name == a.settings().ActiveProfile
+			isDefault := p.Name == a.settings().DefaultProfile
 			ui.Row(c).FillWidth().AlignItems(ui.Center).Children(func() {
 				// The switch area is a plain row with its own
 				// Clicked state, not a Button wrapping a
@@ -208,11 +208,11 @@ func (a *App) pageProfileDetail(c *ui.Context) {
 			a.testRuleOut = ""
 			a.dlgTestRule = true
 		})
-		if name != a.set.DefaultProfile {
+		if name != a.settings().DefaultProfile {
 			hairline(c)
 			navRow(c, lucide.Check(), "设为默认配置", "", false, func() { a.setDefaultProfile(name) })
 		}
-		if name != a.set.ActiveProfile {
+		if name != a.settings().ActiveProfile {
 			hairline(c)
 			navRow(c, lucide.Trash(), "删除配置", "", true, func() {
 				a.deleteProfile(name)
@@ -265,7 +265,7 @@ func (a *App) pageProfileSection(c *ui.Context) {
 			}
 		})
 	case "rules":
-		a.rulesList(c, content, name == a.set.ActiveProfile)
+		a.rulesList(c, content, name == a.settings().ActiveProfile)
 	}
 }
 

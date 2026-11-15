@@ -167,9 +167,7 @@ func (a *App) dnsLogLoop(ctx context.Context) {
 }
 
 func (a *App) dnsLogStream(ctx context.Context, tracker *dnsTracker) {
-	a.mu.Lock()
-	cli := a.cli
-	a.mu.Unlock()
+	cli := a.client()
 	if cli == nil {
 		return
 	}

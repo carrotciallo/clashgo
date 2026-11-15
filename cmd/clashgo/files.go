@@ -1,67 +1,73 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 )
 
-// pickFile opens the desktop file chooser (zenity) and calls back
-// with the chosen path. The chooser runs on its own goroutine; the
-// callback only stashes the path into form state, which the
-// continuously redrawn UI picks up on its next frame.
-func pickFile(title string, cb func(path string)) {
-	go func() {
-		out, err := exec.Command("zenity", "--file-selection", "--title="+title).Output()
-		if err != nil {
-			return // cancelled or no chooser available
+// Choosers are cancellable owned tasks. Form callbacks always run on the UI.
+func (a *App) pickFile(title string, cb func(string)) {
+	a.launch(func() {
+		out, err := exec.CommandContext(a.appContext(), "zenity", "--file-selection", "--title="+title).Output()
+		if err == nil {
+			if p := strings.TrimSpace(string(out)); p != "" {
+				a.onUI(func() { cb(p) })
+			}
 		}
-		if p := strings.TrimSpace(string(out)); p != "" {
-			cb(p)
+	})
+}
+func (a *App) pickSaveFile(title, filename string, cb func(string)) {
+	a.launch(func() {
+		out, err := exec.CommandContext(a.appContext(), "zenity", "--file-selection", "--save", "--confirm-overwrite", "--title="+title, "--filename="+filename).Output()
+		if err == nil {
+			if p := strings.TrimSpace(string(out)); p != "" {
+				a.onUI(func() { cb(p) })
+			}
 		}
-	}()
+	})
 }
 
-// pickSaveFile opens the desktop save chooser (zenity) seeded
-// with a filename and calls back with the chosen destination.
-func pickSaveFile(title, filename string, cb func(path string)) {
-	go func() {
-		out, err := exec.Command("zenity", "--file-selection", "--save", "--confirm-overwrite",
-			"--title="+title, "--filename="+filename).Output()
+func (a *App) readQR(path string) {
+	a.launch(func() {
+		ctx, cancel := context.WithTimeout(a.appContext(), 15*time.Second)
+		defer cancel()
+		var s string
+		var err error
+		if path == "" {
+			s, err = decodeQRClipboard(ctx)
+		} else {
+			s, err = decodeQRImage(ctx, path)
+		}
 		if err != nil {
-			return // cancelled or no chooser available
+			a.setMsg("%v", err)
+			return
 		}
-		if p := strings.TrimSpace(string(out)); p != "" {
-			cb(p)
-		}
-	}()
+		a.onUI(func() { a.applyQRCode(s) })
+	})
 }
-
-// decodeQRImage runs zbarimg over an image file and returns the
-// first decoded payload.
-func decodeQRImage(path string) (string, error) {
-	out, err := exec.Command("zbarimg", "-q", "--raw", path).Output()
+func decodeQRImage(ctx context.Context, path string) (string, error) {
+	out, err := exec.CommandContext(ctx, "zbarimg", "-q", "--raw", path).Output()
 	if err != nil || strings.TrimSpace(string(out)) == "" {
 		return "", fmt.Errorf("没识别出二维码")
 	}
 	return strings.TrimSpace(string(out)), nil
 }
-
-// decodeQRClipboard pulls an image off the Wayland clipboard and
-// decodes the QR code in it.
-func decodeQRClipboard() (string, error) {
+func decodeQRClipboard(ctx context.Context) (string, error) {
 	tmp, err := os.CreateTemp("", "clashgo-qr-*.png")
 	if err != nil {
 		return "", err
 	}
 	defer os.Remove(tmp.Name())
-	cmd := exec.Command("wl-paste", "--type", "image/png")
+	cmd := exec.CommandContext(ctx, "wl-paste", "--type", "image/png")
 	cmd.Stdout = tmp
 	runErr := cmd.Run()
 	tmp.Close()
-	if st, serr := os.Stat(tmp.Name()); runErr != nil || serr != nil || st.Size() == 0 {
+	if st, err := os.Stat(tmp.Name()); runErr != nil || err != nil || st.Size() == 0 {
 		return "", fmt.Errorf("剪贴板里没有图片")
 	}
-	return decodeQRImage(tmp.Name())
+	return decodeQRImage(ctx, tmp.Name())
 }

@@ -25,7 +25,8 @@ func (a *App) testProviderDelay(provider string) {
 	a.mu.Lock()
 	nodes := filterNodes(a.providers[provider], "")
 	a.mu.Unlock()
-	go func() {
+	a.operate(func() {
+		cli := a.client()
 		a.setBusy(true, "测速 "+provider+"…")
 		defer a.setBusy(false, "")
 		results := make(map[string]int, len(nodes))
@@ -33,12 +34,15 @@ func (a *App) testProviderDelay(provider string) {
 		var wg sync.WaitGroup
 		slots := make(chan struct{}, 4)
 		for _, node := range nodes {
+			if a.appContext().Err() != nil {
+				break
+			}
 			slots <- struct{}{}
 			wg.Add(1)
 			go func(name string) {
 				defer wg.Done()
 				defer func() { <-slots }()
-				delay, err := a.cli.ProviderDelay(provider, name, "https://www.gstatic.com/generate_204", 5000)
+				delay, err := cli.ProviderDelay(provider, name, "https://www.gstatic.com/generate_204", 5000)
 				if err != nil {
 					delay = 0
 				}
@@ -59,5 +63,5 @@ func (a *App) testProviderDelay(provider string) {
 			a.delays["节点选择"][name] = delay
 		}
 		a.mu.Unlock()
-	}()
+	})
 }

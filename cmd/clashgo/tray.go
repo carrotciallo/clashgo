@@ -49,7 +49,7 @@ func (a *App) refreshTray() {
 		return
 	}
 	captureLabel := "切换到 TUN 模式"
-	if a.set.TUNEnabled {
+	if a.settings().TUNEnabled {
 		captureLabel = "切换到系统代理"
 	}
 	status := "核心未就绪"

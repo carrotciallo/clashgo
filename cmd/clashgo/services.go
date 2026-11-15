@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/carrotciallo/clashgo/internal/config"
 	"github.com/egoist/mygo/ui"
 )
 
@@ -62,11 +63,12 @@ func svcStatusText(r svcResult) (string, ui.Color) {
 // enabledServices resolves the user's selection from settings
 // (nil selection = the whole catalog; empty selection = none).
 func (a *App) enabledServices() []svcDef {
-	if a.set.Services == nil {
+	settings := a.settings()
+	if settings.Services == nil {
 		return serviceDefs
 	}
 	want := map[string]bool{}
-	for _, n := range a.set.Services {
+	for _, n := range settings.Services {
 		want[n] = true
 	}
 	out := make([]svcDef, 0, len(serviceDefs))
@@ -91,31 +93,33 @@ func (a *App) serviceEnabled(name string) bool {
 // customises the set it is stored explicitly (materialised from the
 // all-on default first).
 func (a *App) setServiceEnabled(name string, on bool) {
-	names := []string{}
-	if a.set.Services == nil {
-		for _, d := range serviceDefs {
-			names = append(names, d.Name)
-		}
-	} else {
-		names = append(names, a.set.Services...)
-	}
-	out := names[:0]
-	found := false
-	for _, n := range names {
-		if n == name {
-			found = true
-			if on {
-				out = append(out, n)
+	err := a.changeSettings(func(settings *config.Settings) {
+		names := []string{}
+		if settings.Services == nil {
+			for _, d := range serviceDefs {
+				names = append(names, d.Name)
 			}
-			continue
+		} else {
+			names = append(names, settings.Services...)
 		}
-		out = append(out, n)
-	}
-	if on && !found {
-		out = append(out, name)
-	}
-	a.set.Services = out
-	if err := a.store.SaveSettings(a.set); err != nil {
+		out := names[:0]
+		found := false
+		for _, n := range names {
+			if n == name {
+				found = true
+				if on {
+					out = append(out, n)
+				}
+				continue
+			}
+			out = append(out, n)
+		}
+		if on && !found {
+			out = append(out, name)
+		}
+		settings.Services = out
+	})
+	if err != nil {
 		a.setMsg("保存服务设置失败：%v", err)
 	}
 }
@@ -137,7 +141,7 @@ func (a *App) checkServices() {
 	for _, d := range defs {
 		a.svcResults[d.Name] = svcResult{State: 1}
 	}
-	port := a.set.MixedPort
+	port := a.settings().MixedPort
 	a.mu.Unlock()
 
 	proxyURL, _ := url.Parse(fmt.Sprintf("http://127.0.0.1:%d", port))
@@ -153,7 +157,8 @@ func (a *App) checkServices() {
 			defer wg.Done()
 			t0 := time.Now()
 			res := svcResult{State: 3}
-			if resp, err := cl.Get(d.URL); err == nil {
+			req, _ := http.NewRequestWithContext(a.appContext(), http.MethodGet, d.URL, nil)
+			if resp, err := cl.Do(req); err == nil {
 				_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10))
 				resp.Body.Close()
 				res = svcResult{State: 2, Latency: time.Since(t0)}
