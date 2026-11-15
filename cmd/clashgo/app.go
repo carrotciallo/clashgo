@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/carrotciallo/clashgo/internal/config"
@@ -43,7 +44,10 @@ type App struct {
 	// framework quit) from a window close: closes hide to the tray,
 	// quits let the window die. Set from OnBeforeQuit (fires before
 	// any window closes) and by requestQuit.
-	quitting bool
+	quitting atomic.Bool
+	quitDone atomic.Bool
+	quitOnce sync.Once
+	work     *core.Tasks
 
 	renderMu    sync.Mutex
 	mu          sync.Mutex
@@ -345,7 +349,7 @@ func (a *App) startCore() {
 	// flight must win over a capture switch still landing (the two
 	// raced once, 2026-11-11: the park landed after Disarm had
 	// already restored the desktop, leaving a stale parked record).
-	if a.quitting {
+	if a.quitting.Load() {
 		return
 	}
 	if a.set.TUNEnabled {
@@ -437,8 +441,16 @@ func modeLabel(m string) string {
 // requestQuit is the only in-app quit path: it flags the quit so the
 // window's OnClose lets the close through, then asks the app to quit.
 func (a *App) requestQuit() {
-	a.quitting = true
-	mygo.App.Quit()
+	a.quitting.Store(true)
+	a.quitOnce.Do(func() {
+		// Native API calls may synchronously wait for the main thread. Keep
+		// its event loop alive until managed workers and cleanup have finished.
+		go func() {
+			a.shutdown()
+			a.quitDone.Store(true)
+			mygo.RunOnMain(func() { mygo.App.Quit() })
+		}()
+	})
 }
 
 func (a *App) refreshEgress() {
@@ -506,11 +518,16 @@ func fetchEgressOrg(cl *http.Client, wantIP string) (string, bool) {
 // pollLoop refreshes traffic totals while the window is open, and the
 // egress readout every ~30 s (it can be stale right after startup,
 // before auto-selection settles).
-func (a *App) pollLoop() {
+func (a *App) pollLoop(ctx context.Context) {
 	t := time.NewTicker(2 * time.Second)
 	defer t.Stop()
 	ticks := 0
-	for range t.C {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
 		a.mu.Lock()
 		open, ok := a.windowOpen, a.coreOK
 		a.mu.Unlock()
@@ -1409,6 +1426,9 @@ func (a *App) deleteRule(idx int) {
 }
 
 func (a *App) shutdown() {
+	if a.work != nil {
+		a.work.Wait()
+	}
 	a.px.Disarm()
 	a.px.EndSession()
 	a.sup.Stop()

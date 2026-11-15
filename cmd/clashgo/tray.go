@@ -90,7 +90,7 @@ func (a *App) openWindow() {
 		Content: ui.View(a.view),
 	})
 	w.OnClose(func(e *mygo.CloseEvent) {
-		if a.quitting {
+		if a.quitting.Load() {
 			return // real quit: let it close
 		}
 		e.PreventDefault()

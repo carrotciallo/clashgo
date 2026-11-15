@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -154,22 +155,25 @@ func dnsVia(server string) string {
 // level is per-subscription: the core's own file logging stays
 // at info. Reconnects whenever the core restarts or the stream
 // breaks.
-func (a *App) dnsLogLoop() {
-	tracker := newDNSTracker()
-	for {
-		a.dnsLogStream(tracker)
-		time.Sleep(2 * time.Second)
+func (a *App) dnsLogLoop(ctx context.Context) {
+	for ctx.Err() == nil {
+		a.dnsLogStream(ctx, newDNSTracker())
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(2 * time.Second):
+		}
 	}
 }
 
-func (a *App) dnsLogStream(tracker *dnsTracker) {
+func (a *App) dnsLogStream(ctx context.Context, tracker *dnsTracker) {
 	a.mu.Lock()
 	cli := a.cli
 	a.mu.Unlock()
 	if cli == nil {
 		return
 	}
-	req, err := http.NewRequest(http.MethodGet, cli.Base+"/logs?level=debug", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, cli.Base+"/logs?level=debug", nil)
 	if err != nil {
 		return
 	}

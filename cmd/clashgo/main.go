@@ -105,6 +105,7 @@ func main() {
 		}
 	}
 	a := &App{
+		work:  core.NewTasks(context.Background()),
 		store: store, set: set, reg: reg, coreBin: coreBin,
 		delays:          map[string]map[string]int{},
 		setArm:          set.ArmProxyOnStart,
@@ -138,8 +139,7 @@ func main() {
 	signal.Notify(sigc, syscall.SIGTERM, syscall.SIGINT)
 	go func() {
 		<-sigc
-		a.shutdown()
-		os.Exit(0)
+		a.requestQuit()
 	}()
 
 	mygo.App.WhenReady(func() {
@@ -150,14 +150,18 @@ func main() {
 		if !(a.autostartLaunch && set.SilentAutostart) {
 			a.openWindow()
 		}
-		go a.bootstrap()
+		a.work.Go(a.bootstrap)
 	})
 	// OnBeforeQuit fires before any window is closed during a quit, so
 	// the window's OnClose can tell a real quit from a user close
 	// (which hides to the tray instead). Covers the tray's RoleQuit
 	// item and every other framework quit path.
-	mygo.App.OnBeforeQuit(func(*mygo.QuitEvent) { a.quitting = true })
-	mygo.App.OnWillQuit(func(*mygo.QuitEvent) { a.shutdown() })
+	mygo.App.OnBeforeQuit(func(e *mygo.QuitEvent) {
+		if !a.quitDone.Load() {
+			e.PreventDefault()
+			a.requestQuit()
+		}
+	})
 	if err := mygo.App.Run(); err != nil {
 		fatal("run: %v", err)
 	}
@@ -168,24 +172,30 @@ func main() {
 // with provider cache files on disk, config validation stays a local,
 // fast operation; without them the core tries to fetch providers
 // during validation and can stall on a slow airport.
-func (a *App) bootstrap() {
+func (a *App) bootstrap(ctx context.Context) {
 	if a.healed {
 		a.setMsg("已修复上次异常退出留下的系统代理")
 	}
 	for _, s := range a.reg.Subs {
-		if subs.ProviderFileExists(a.store.ProvidersDir(), s.Name) {
+		if ctx.Err() != nil {
+			return
+		}
+		if s.Local || subs.ProviderFileExists(a.store.ProvidersDir(), s.Name) {
 			continue
 		}
 		sub := a.reg.Find(s.Name)
-		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 		if err := subs.Fetch(ctx, sub, a.store.ProvidersDir()); err != nil {
 			sub.LastError = err.Error()
 			a.setMsg("订阅 %s 首次抓取失败：%v（可到节点页重试）", s.Name, err)
 		}
 		cancel()
 	}
+	if ctx.Err() != nil {
+		return
+	}
 	_ = a.reg.Save()
 	a.applyConfig()
-	go a.pollLoop()
-	go a.dnsLogLoop()
+	a.work.Go(a.pollLoop)
+	a.work.Go(a.dnsLogLoop)
 }
