@@ -12,10 +12,14 @@ import (
 	"strconv"
 	"testing"
 
+	"github.com/carrotciallo/clashgo/assets"
 	"github.com/carrotciallo/clashgo/internal/core"
 )
 
-func TestTrayUsesSameCatInColorAndGray(t *testing.T) {
+func TestTrayUsesOutlinedCatSeparateFromApplication(t *testing.T) {
+	if bytes.Equal(trayIconPNG(true), assets.IconPNG) {
+		t.Fatal("tray must not reuse the full application icon")
+	}
 	active, err := png.Decode(bytes.NewReader(trayIconPNG(true)))
 	if err != nil {
 		t.Fatal(err)
@@ -27,7 +31,7 @@ func TestTrayUsesSameCatInColorAndGray(t *testing.T) {
 	if active.Bounds() != inactive.Bounds() || active.Bounds().Dx() != 256 {
 		t.Fatal("tray image dimensions changed")
 	}
-	colored := false
+	ink := false
 	for y := 0; y < 256; y++ {
 		for x := 0; x < 256; x++ {
 			a := color.NRGBAModel.Convert(active.At(x, y)).(color.NRGBA)
@@ -35,13 +39,17 @@ func TestTrayUsesSameCatInColorAndGray(t *testing.T) {
 			if b.R != b.G || b.G != b.B || b.A != a.A {
 				t.Fatalf("gray image changed silhouette or contains color at %d,%d", x, y)
 			}
-			if a.A > 0 && (a.R != a.G || a.G != a.B) {
-				colored = true
+			if a.A == 255 {
+				ink = true
+				// Raster compositing can round overlapping antialiased strokes.
+				if a.R < 14 || a.R > 18 || a.G < 16 || a.G > 20 || a.B < 20 || a.B > 24 || b.R != 140 {
+					t.Fatal("incorrect normal or inactive ink")
+				}
 			}
 		}
 	}
-	if !colored {
-		t.Fatal("active cat has no color")
+	if !ink {
+		t.Fatal("active cat has no opaque line art")
 	}
 	first, second := trayIconPNG(false), trayIconPNG(false)
 	if &first[0] != &second[0] {

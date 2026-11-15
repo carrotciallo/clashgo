@@ -3,6 +3,7 @@ package main
 import (
 	"log"
 
+	"github.com/carrotciallo/clashgo/assets"
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 )
@@ -101,7 +102,7 @@ func (a *App) openWindow() {
 		Height:  620,
 		Content: ui.View(a.view),
 	})
-	if err := w.SetIcon(trayIconPNG(true)); err != nil {
+	if err := w.SetIcon(assets.IconPNG); err != nil {
 		log.Printf("clashgo: window icon: %v", err)
 	}
 	w.OnClose(func(e *mygo.CloseEvent) {

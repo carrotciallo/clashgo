@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" fill="none">
+<title>ClashGo — Line Cat</title>
+<g transform="translate(-44.8 -46.825) scale(1.35)" stroke="#101216" stroke-width="7" stroke-linecap="round" stroke-linejoin="round">
+<path d="M57 119 L55 60 Q55 51 63 56 L101 84 Q128 77 155 84 L193 56 Q201 51 201 60 L199 119 Q214 145 197 173 Q177 204 128 204 Q79 204 59 173 Q42 145 57 119Z"/>
+<path d="M70 77 L72 109 L91 94Z M186 77 L184 109 L165 94Z" stroke-width="5.5"/>
+<ellipse cx="94" cy="136" rx="8" ry="13" fill="#101216" stroke="none"/><ellipse cx="162" cy="136" rx="8" ry="13" fill="#101216" stroke="none"/>
+<path d="M121 159 Q128 155 135 159 L128 166Z M128 166 V171 M116 172 Q122 179 128 171 Q134 179 140 172" stroke-width="5.5"/>
+<path d="M72 155 Q57 150 42 151 M72 166 Q57 166 45 172 M184 155 Q199 150 214 151 M184 166 Q199 166 211 172" stroke-width="5.5"/>
+</g></svg>
