@@ -68,8 +68,13 @@ func (c *Client) doContext(ctx context.Context, method, path string, body any) (
 
 // WaitReady polls /version until the core answers or the deadline hits.
 func (c *Client) WaitReady(timeout time.Duration) error {
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	return c.WaitReadyContext(context.Background(), timeout)
+}
+
+func (c *Client) WaitReadyContext(parent context.Context, timeout time.Duration) error {
+	ctx, cancel := context.WithTimeout(parent, timeout)
 	defer cancel()
+	interval := 20 * time.Millisecond
 	for {
 		b, err := c.doContext(ctx, http.MethodGet, "/version", nil)
 		var version struct {
@@ -81,8 +86,9 @@ func (c *Client) WaitReady(timeout time.Duration) error {
 		select {
 		case <-ctx.Done():
 			return fmt.Errorf("core did not become ready: %w", ctx.Err())
-		case <-time.After(250 * time.Millisecond):
+		case <-time.After(interval):
 		}
+		interval = min(interval*2, 250*time.Millisecond)
 	}
 }
 
@@ -102,46 +108,47 @@ type Proxy struct {
 // /proxies contains only config-defined proxies and groups — provider
 // nodes live under /providers/proxies — so the two are merged here.
 func (c *Client) Proxies() (map[string]Proxy, error) {
-	b, err := c.do(http.MethodGet, "/proxies", nil)
+	proxies, _, err := c.ProxySnapshot(context.Background())
+	return proxies, err
+}
+
+// ProxySnapshot shares one provider response between the flat lookup and the
+// subscription sections. Provider failure remains best-effort (nil pools).
+func (c *Client) ProxySnapshot(ctx context.Context) (map[string]Proxy, map[string][]Proxy, error) {
+	b, err := c.doContext(ctx, http.MethodGet, "/proxies", nil)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	var resp struct {
 		Proxies map[string]Proxy `json:"proxies"`
 	}
 	if err := json.Unmarshal(b, &resp); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	out := resp.Proxies
 	if out == nil {
 		out = make(map[string]Proxy)
 	}
-	pb, err := c.do(http.MethodGet, "/providers/proxies", nil)
-	if err != nil {
-		return out, nil // provider view is best-effort
-	}
-	var presp struct {
-		Providers map[string]struct {
-			Proxies []Proxy `json:"proxies"`
-		} `json:"providers"`
-	}
-	if json.Unmarshal(pb, &presp) == nil {
-		for _, prov := range presp.Providers {
-			for _, p := range prov.Proxies {
-				if _, exists := out[p.Name]; !exists && p.Name != "" {
-					out[p.Name] = p
-				}
+	pools, _ := c.providersContext(ctx)
+	for _, nodes := range pools {
+		for _, p := range nodes {
+			if _, exists := out[p.Name]; !exists && p.Name != "" {
+				out[p.Name] = p
 			}
 		}
 	}
-	return out, nil
+	return out, pools, nil
 }
 
 // Providers returns the proxy list of every provider, keyed by
 // provider name — the per-subscription node pools the nodes page is
 // organized by (a provider and a subscription share a name).
 func (c *Client) Providers() (map[string][]Proxy, error) {
-	b, err := c.do(http.MethodGet, "/providers/proxies", nil)
+	return c.providersContext(context.Background())
+}
+
+func (c *Client) providersContext(ctx context.Context) (map[string][]Proxy, error) {
+	b, err := c.doContext(ctx, http.MethodGet, "/providers/proxies", nil)
 	if err != nil {
 		return nil, err
 	}

@@ -373,7 +373,7 @@ func (a *App) startCore() {
 		a.setMsg("核心启动失败：%v", err)
 		return
 	}
-	err = a.client().WaitReady(20 * time.Second)
+	err = a.client().WaitReadyContext(a.appContext(), 20*time.Second)
 	if err == nil {
 		err = a.waitTUNReady(a.client(), a.settings().TUNEnabled)
 	}
@@ -441,11 +441,12 @@ func (a *App) refreshProxies() {
 	if !a.sup.Running() {
 		return
 	}
-	px, err := a.client().Proxies()
+	ctx, cancel := context.WithTimeout(a.appContext(), 3*time.Second)
+	defer cancel()
+	px, pv, err := a.client().ProxySnapshot(ctx)
 	if err != nil {
 		return
 	}
-	pv, _ := a.client().Providers() // best-effort; sections fall back gracefully
 	a.mu.Lock()
 	a.proxies = px
 	if pv != nil {
