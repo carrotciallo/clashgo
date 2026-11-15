@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"maps"
 	"strings"
 
 	"github.com/carrotciallo/clashgo/internal/core"
@@ -19,7 +20,10 @@ func (a *App) pageProxies(c *ui.Context) {
 	_, _, _, _, _, _, _ = a.snapshot()
 	a.mu.Lock()
 	providers := a.providers
-	delays := a.delays
+	delays := make(map[string]map[string]int, len(a.delays))
+	for group, values := range a.delays {
+		delays[group] = maps.Clone(values)
+	}
 	a.mu.Unlock()
 	subsList := append([]subs.Subscription{}, a.reg.Subs...)
 	chain := a.egressChain()
@@ -30,7 +34,7 @@ func (a *App) pageProxies(c *ui.Context) {
 	// The shell already renders the page title and status; this row
 	// only carries the page's actions.
 	ui.Row(c).FillWidth().AlignItems(ui.Center).Children(func() {
-		ui.Row(c).Grow(1).Children(func() {})
+		ov.TextBox(c, &a.nodeFilter, ov.TextBoxOptions{}).Label("搜索节点名称或协议").Grow(1)
 		if iconButton(c, "添加订阅", lucide.CirclePlus()).Clicked() {
 			a.dlgAddSub = true
 		}
@@ -88,8 +92,10 @@ func (a *App) subSection(c *ui.Context, s subs.Subscription, providers map[strin
 			head.Children(func() {
 				ui.Row(c).Gap(7).AlignItems(ui.Center).Children(func() {
 					txt(c, s.Name, fsValue, true, colText).SingleLine()
-					if s.Split {
-						tag(c, "整包配置", colMuted)
+					if s.Local {
+						tag(c, "本地节点池", colMuted)
+					} else if s.Split {
+						tag(c, "已扁平化", colMuted)
 					}
 				})
 				info := fmt.Sprintf("%d 个节点", s.NodeCount)
@@ -116,7 +122,7 @@ func (a *App) subSection(c *ui.Context, s subs.Subscription, providers map[strin
 				a.toggleSubCollapsed(s.Name)
 			}
 			if iconButton(c, "测速 "+s.Name, lucide.Zap()).Clicked() {
-				a.testDelay("节点选择")
+				a.testProviderDelay(s.Name)
 			}
 			if iconButton(c, "刷新 "+s.Name, lucide.RefreshCw()).Clicked() {
 				a.refreshSubscription(s.Name)
@@ -147,6 +153,7 @@ func nodeDelay(p core.Proxy, delays map[string]map[string]int) (ms int, timeout,
 		if d := p.History[len(p.History)-1].Delay; d > 0 {
 			return d, false, true
 		}
+		return 0, true, true
 	}
 	return 0, false, false
 }
@@ -157,31 +164,25 @@ func nodeDelay(p core.Proxy, delays map[string]map[string]int) (ms int, timeout,
 // and an info button opening a detail strip. Picking a row routes
 // the egress through it (useNode).
 func (a *App) providerSubRows(c *ui.Context, s subs.Subscription, providers map[string][]core.Proxy, delays map[string]map[string]int, leaf string) {
-	nodes := providers[s.Name]
-	shown := 0
-	for _, p := range nodes {
-		if strings.HasPrefix(p.Name, "__") {
-			continue
-		}
-		shown++
-	}
-	if shown == 0 {
+	nodes := filterNodes(providers[s.Name], a.nodeFilter)
+	if len(nodes) == 0 {
 		ui.Row(c).FillWidth().Padding(13, 16).Children(func() {
-			txt(c, "暂无节点（核心未就绪或尚未抓取）。", fsSmall, false, colFaint)
+			txt(c, "无匹配节点", fsSmall, false, colFaint)
 		})
 		return
 	}
-	idx := 0
-	for _, p := range nodes {
+	ui.Row(c).FillWidth().Padding(8, 18).Gap(10).Background(colInset).Children(func() {
+		txt(c, "节点 / 协议", fsMicro, true, colFaint).Grow(1)
+		txt(c, "延迟", fsMicro, true, colFaint).Width(64).TextAlign(ui.End)
+		ui.Box(c).Width(31)
+	})
+	for idx, p := range nodes {
 		p := p
-		if strings.HasPrefix(p.Name, "__") {
-			continue
+		row := ui.Column(c).FillWidth()
+		if idx%2 == 1 {
+			row.Background(colZebra)
 		}
-		if idx > 0 {
-			hairline(c)
-		}
-		idx++
-		a.nodeRow(c, s, p, delays, leaf)
+		row.Children(func() { a.nodeRow(c, s, p, delays, leaf) })
 		if a.expandedNode == p.Name {
 			a.nodeDetail(c, s, p, delays, leaf)
 		}

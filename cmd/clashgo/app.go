@@ -103,6 +103,7 @@ type App struct {
 	// expandedNode is the node whose detail strip is open on the
 	// nodes page ("" = none).
 	expandedNode string
+	nodeFilter   string
 	// collapsedSubs marks subscriptions folded on the nodes
 	// page; seeded from and persisted to Settings.CollapsedSubs.
 	collapsedSubs map[string]bool
