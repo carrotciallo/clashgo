@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -28,16 +27,19 @@ import (
 // App holds all mutable state. Status fields are guarded by mu and
 // written by background workers; form fields live on the UI thread.
 type App struct {
-	stateMu sync.RWMutex
-	opMu    sync.Mutex
-	store   *config.Store
-	set     config.Settings
-	reg     *subs.Registry
-	sup     *core.Supervisor
-	cli     *core.Client
-	px      *sysproxy.Manager
-	coreBin string
-	healed  bool
+	editProfileName, editProfileText, editProfileBase string
+	dlgEditProfile                                    bool
+	settingsBusy                                      bool
+	stateMu                                           sync.RWMutex
+	opMu                                              sync.Mutex
+	store                                             *config.Store
+	set                                               config.Settings
+	reg                                               *subs.Registry
+	sup                                               *core.Supervisor
+	cli                                               *core.Client
+	px                                                *sysproxy.Manager
+	coreBin                                           string
+	healed                                            bool
 
 	tray *mygo.Tray
 	win  *mygo.Window
@@ -285,21 +287,23 @@ func (a *App) setCapture(tun bool) {
 				return
 			}
 		}
-		prev := a.settings().TUNEnabled
-		if err := a.changeSettings(func(s *config.Settings) { s.TUNEnabled = tun }); err != nil {
-			a.setMsg("保存设置失败：%v", err)
-			return
+		next := a.settings()
+		next.TUNEnabled = tun
+		content, err := a.store.LoadMaster()
+		if err == nil {
+			err = a.commitConfiguration(next, content, false, true)
 		}
-		if !a.applyConfigRestart() {
-			_ = a.changeSettings(func(s *config.Settings) { s.TUNEnabled = prev })
-			a.applyConfigRestart()
-			a.setMsg("切换接管方式失败，已回滚")
+		if err != nil {
+			a.setMsg("切换接管方式失败：%v", err)
 			return
 		}
 		if !tun {
 			// An explicit switch to proxy mode arms even when the
 			// autostart preference is off — the click is the intent.
-			a.proxyManager().Arm()
+			if err := a.proxyManager().Arm(); err != nil {
+				a.setMsg("接管系统代理失败：%v", err)
+				return
+			}
 		}
 		if tun {
 			a.setMsg("接管方式已切换：TUN")
@@ -933,27 +937,16 @@ func (a *App) switchProfile(name string) {
 		}
 		a.setBusy(true, "切换配置…")
 		defer a.setBusy(false, "")
-		old := a.settings().ActiveProfile
-		a.store.SetActiveProfile(name)
-		if err := a.changeSettings(func(s *config.Settings) { s.ActiveProfile = name }); err != nil {
-			a.store.SetActiveProfile(old)
-			a.setMsg("保存配置选择失败：%v", err)
+		content, err := a.profileContent(name)
+		if err != nil {
+			a.setMsg("读取配置失败：%v", err)
 			return
 		}
-		if err := a.renderAndInstall(); err != nil {
-			a.store.SetActiveProfile(old)
-			_ = a.changeSettings(func(s *config.Settings) { s.ActiveProfile = old })
-			a.setMsg("配置未切换，新配置校验不过：%v", err)
+		next := a.settings()
+		next.ActiveProfile = name
+		if err := a.commitConfiguration(next, content, false, true); err != nil {
+			a.setMsg("配置切换失败：%v", err)
 			return
-		}
-		if !a.sup.Running() {
-			a.startCore()
-			a.mu.Lock()
-			ok := a.coreOK
-			a.mu.Unlock()
-			if !ok {
-				return
-			}
 		}
 		a.setMsg("已切换到配置「%s」", profileDisplayName(name))
 		a.refreshProxies()
@@ -976,17 +969,22 @@ func (a *App) createProfile() {
 		a.setMsg("先给新配置起个名")
 		return
 	}
-	master, err := a.store.LoadMaster()
-	if err != nil {
-		a.setMsg("读当前配置失败：%v", err)
-		return
-	}
-	if err := a.store.CreateProfile(name, master); err != nil {
-		a.setMsg("新建配置失败：%v", err)
-		return
-	}
-	a.profileName = ""
-	a.setMsg("已新建配置「%s」（内容复制自当前配置，未切换）", name)
+	a.operate(func() {
+		if !config.ValidProfileName(name) || a.store.ProfileExists(name) {
+			a.setMsg("配置名无效或已存在")
+			return
+		}
+		master, err := a.store.LoadMaster()
+		if err == nil {
+			err = a.commitProfile(name, master)
+		}
+		if err != nil {
+			a.setMsg("新建配置失败：%v", err)
+			return
+		}
+		a.onUI(func() { a.profileName = "" })
+		a.setMsg("已新建配置「%s」", name)
+	})
 }
 
 // restoreDefaultProfile is Shadowrocket's 恢复默认配置： the
@@ -994,44 +992,35 @@ func (a *App) createProfile() {
 // or overwritten) and the app switches to it through the usual
 // validated path. Other profiles are untouched.
 func (a *App) restoreDefaultProfile() {
-	const name = "默认配置"
-	if a.store.ProfileExists(name) {
-		if err := os.WriteFile(a.store.ProfilePath(name), []byte(config.DefaultMaster), 0o644); err != nil {
+	a.operate(func() {
+		next := a.settings()
+		next.ActiveProfile = "默认配置"
+		if err := a.commitConfiguration(next, config.DefaultMaster, true, true); err != nil {
 			a.setMsg("恢复默认配置失败：%v", err)
 			return
 		}
-	} else if err := a.store.CreateProfile(name, config.DefaultMaster); err != nil {
-		a.setMsg("恢复默认配置失败：%v", err)
-		return
-	}
-	if a.settings().ActiveProfile == name {
-		if err := a.store.SaveMaster(config.DefaultMaster); err != nil {
-			a.setMsg("恢复默认配置失败：%v", err)
-			return
-		}
-		a.applyConfig()
 		a.setMsg("已恢复默认配置")
-		return
-	}
-	a.switchProfile(name)
+	})
 }
 
 // duplicateProfile copies a profile under a fresh 副本 name.
 func (a *App) duplicateProfile(name string) {
-	content, err := a.profileContent(name)
-	if err != nil {
-		a.setMsg("读配置失败：%v", err)
-		return
-	}
-	newName := name + " 副本"
-	for i := 2; a.store.ProfileExists(newName); i++ {
-		newName = fmt.Sprintf("%s 副本 %d", name, i)
-	}
-	if err := a.store.CreateProfile(newName, content); err != nil {
-		a.setMsg("复制配置失败：%v", err)
-		return
-	}
-	a.setMsg("已复制为「%s」", newName)
+	a.operate(func() {
+		content, err := a.profileContent(name)
+		if err != nil {
+			a.setMsg("读配置失败：%v", err)
+			return
+		}
+		newName := name + " 副本"
+		for i := 2; a.store.ProfileExists(newName); i++ {
+			newName = fmt.Sprintf("%s 副本 %d", name, i)
+		}
+		if err := a.commitProfile(newName, content); err != nil {
+			a.setMsg("复制配置失败：%v", err)
+			return
+		}
+		a.setMsg("已复制为「%s」", newName)
+	})
 }
 
 // exportProfile copies a profile file to a user-chosen path.
@@ -1053,11 +1042,18 @@ func (a *App) exportProfile(name string) {
 // openProfileText hands the profile file to the desktop's text
 // editor (编辑纯文本）.
 func (a *App) openProfileText(name string) {
-	path := a.store.ProfilePath(name)
-	a.launch(func() {
-		if err := exec.Command("xdg-open", path).Start(); err != nil {
-			a.setMsg("打开编辑器失败：%v", err)
+	a.operate(func() {
+		content, err := a.profileContent(name)
+		if err != nil {
+			a.setMsg("读取配置失败：%v", err)
+			return
 		}
+		a.onUI(func() {
+			a.editProfileName = name
+			a.editProfileText = content
+			a.editProfileBase = content
+			a.dlgEditProfile = true
+		})
 	})
 }
 
@@ -1105,37 +1101,36 @@ func (a *App) replacePolicy() {
 		return
 	}
 	name := a.cfgTarget()
-	content, err := a.profileContent(name)
-	if err != nil {
-		a.setMsg("读配置失败：%v", err)
-		return
-	}
-	rules := config.ExtractRules(content)
-	n := 0
-	for i, r := range rules {
-		head, policy := rulePolicy(r)
-		if policy != from {
-			continue
+	a.operate(func() {
+		content, err := a.profileContent(name)
+		if err != nil {
+			a.setMsg("读配置失败：%v", err)
+			return
 		}
-		if strings.HasSuffix(r, ",no-resolve") {
-			rules[i] = head + "," + to + ",no-resolve"
-		} else {
-			rules[i] = head + "," + to
+		rules := config.ExtractRules(content)
+		n := 0
+		for i, r := range rules {
+			head, policy := rulePolicy(r)
+			if policy != from {
+				continue
+			}
+			if strings.HasSuffix(r, ",no-resolve") {
+				rules[i] = head + "," + to + ",no-resolve"
+			} else {
+				rules[i] = head + "," + to
+			}
+			n++
 		}
-		n++
-	}
-	if n == 0 {
-		a.setMsg("没有规则在用策略「%s」", from)
-		return
-	}
-	if err := a.saveProfileContent(name, config.ReplaceRules(content, rules)); err != nil {
-		a.setMsg("保存失败：%v", err)
-		return
-	}
-	a.setMsg("已把 %d 条规则的策略 %s 换成 %s", n, from, to)
-	if name == a.settings().ActiveProfile {
-		a.applyConfig()
-	}
+		if n == 0 {
+			a.setMsg("没有规则在用策略「%s」", from)
+			return
+		}
+		if err := a.commitProfile(name, config.ReplaceRules(content, rules)); err != nil {
+			a.setMsg("保存失败：%v", err)
+			return
+		}
+		a.setMsg("已把 %d 条规则的策略 %s 换成 %s", n, from, to)
+	})
 }
 
 // runTestRule evaluates the target profile's rules against the
@@ -1192,7 +1187,11 @@ func (a *App) importConfig() {
 		if name == "" {
 			name = "Shadowrocket 导入"
 		}
-		if err := a.store.CreateProfile(name, master); err != nil {
+		if !config.ValidProfileName(name) || a.store.ProfileExists(name) {
+			a.setMsg("配置名无效或已存在")
+			return
+		}
+		if err := a.commitProfile(name, master); err != nil {
 			a.setMsg("导入失败：%v", err)
 			return
 		}
@@ -1230,19 +1229,21 @@ func fetchText(parent context.Context, rawURL string) (string, error) {
 }
 
 func (a *App) deleteProfile(name string) {
-	if name == a.settings().ActiveProfile {
-		a.setMsg("正在使用的配置不能删除，先切到别的配置")
-		return
-	}
-	if name == a.settings().DefaultProfile {
-		a.setMsg("默认配置不能删除，先改默认")
-		return
-	}
-	if err := a.store.DeleteProfile(name); err != nil {
-		a.setMsg("删除配置失败：%v", err)
-		return
-	}
-	a.setMsg("已删除配置「%s」", profileDisplayName(name))
+	a.operate(func() {
+		if name == a.settings().ActiveProfile {
+			a.setMsg("正在使用的配置不能删除，先切到别的配置")
+			return
+		}
+		if name == a.settings().DefaultProfile {
+			a.setMsg("默认配置不能删除，先改默认")
+			return
+		}
+		if err := a.store.DeleteProfile(name); err != nil {
+			a.setMsg("删除配置失败：%v", err)
+			return
+		}
+		a.setMsg("已删除配置「%s」", profileDisplayName(name))
+	})
 }
 
 // profileDisplayName renders the built-in profile ("") readably.
@@ -1414,13 +1415,12 @@ func (a *App) addRule() {
 		} else {
 			rules = append(rules, rule)
 		}
-		if err := a.store.SaveMaster(config.ReplaceRules(master, rules)); err != nil {
+		if err := a.commitProfile(a.settings().ActiveProfile, config.ReplaceRules(master, rules)); err != nil {
 			a.setMsg("保存规则失败：%v", err)
 			return
 		}
 		a.onUI(func() { a.ruleValue = "" })
 		a.setMsg("规则已添加：%s", rule)
-		a.applyConfig()
 	})
 }
 
@@ -1437,12 +1437,11 @@ func (a *App) deleteRule(idx int) {
 		}
 		removed := rules[idx]
 		rules = append(rules[:idx], rules[idx+1:]...)
-		if err := a.store.SaveMaster(config.ReplaceRules(master, rules)); err != nil {
+		if err := a.commitProfile(a.settings().ActiveProfile, config.ReplaceRules(master, rules)); err != nil {
 			a.setMsg("保存规则失败：%v", err)
 			return
 		}
 		a.setMsg("规则已删除：%s", removed)
-		a.applyConfig()
 	})
 }
 

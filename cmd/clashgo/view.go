@@ -125,6 +125,18 @@ func (a *App) view(c *ui.Context) {
 // keep pages clean: a + entry opens the form, the page itself stays
 // a list). Called every frame; each Dialog self-hides when closed.
 func (a *App) dialogs(c *ui.Context) {
+	ov.Dialog(c, &a.dlgEditProfile, ov.DialogOptions{Label: "编辑配置"}, func(p ui.Element) {
+		txt(c, profileDisplayName(a.editProfileName), fsValue, true, colText)
+		ov.TextBox(c, &a.editProfileText, ov.TextBoxOptions{Multiline: true}).Label("YAML").Lines(12, 24).Grow(1)
+		ui.Row(c).Gap(8).Children(func() {
+			if ov.Button(c, "取消", ov.ButtonGhost).Clicked() {
+				a.dlgEditProfile = false
+			}
+			if ov.Button(c, "验证并保存", ov.ButtonPrimary).Clicked() {
+				a.saveProfileEditor()
+			}
+		})
+	})
 	ov.Dialog(c, &a.dlgAddSub, ov.DialogOptions{Label: "添加订阅"}, func(p ui.Element) {
 		txt(c, "添加订阅", fsValue, true, colText)
 		// Source picker: link / file / paste, plus QR actions that

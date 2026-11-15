@@ -9,8 +9,6 @@ import (
 	"strings"
 
 	"github.com/carrotciallo/clashgo/internal/config"
-	"github.com/carrotciallo/clashgo/internal/core"
-	"github.com/carrotciallo/clashgo/internal/sysproxy"
 	"github.com/egoist/mygo/ui"
 	ov "github.com/oneo-me/onevra/source/components"
 	"github.com/oneo-me/onevra/source/icons/lucide"
@@ -79,7 +77,7 @@ func (a *App) pageSettings(c *ui.Context) {
 		})
 		hairline(c)
 		actionRow(c, "用编辑器打开主配置", lucide.FilePen(), false, func() {
-			_ = exec.Command("xdg-open", a.store.MasterPath()).Start()
+			a.openProfileText(a.settings().ActiveProfile)
 		})
 	})
 
@@ -178,43 +176,17 @@ func (a *App) saveSettings() {
 	// Capture form values on the UI thread, never from the worker.
 	path, arm := strings.TrimSpace(a.setCorePath), a.setArm
 	a.operate(func() {
-		bin := core.FindCore(path)
-		if bin == "" {
-			a.setMsg("核心路径不可用")
+		next := a.settings()
+		next.MixedPort, next.ControllerPort, next.CorePath, next.ArmProxyOnStart = mixed, ctrl, path, arm
+		content, err := a.store.LoadMaster()
+		if err == nil {
+			err = a.commitConfiguration(next, content, false, true)
+		}
+		if err != nil {
+			a.setMsg("设置未应用：%v", err)
 			return
 		}
-		old := a.settings()
-		changed := mixed != old.MixedPort || ctrl != old.ControllerPort || bin != a.corePath()
-		if err := a.changeSettings(func(s *config.Settings) {
-			s.MixedPort, s.ControllerPort, s.CorePath, s.ArmProxyOnStart = mixed, ctrl, path, arm
-		}); err != nil {
-			a.setMsg("保存设置失败：%v", err)
-			return
-		}
-		if changed {
-			px := a.proxyManager()
-			wasArmed := px.Armed()
-			px.Disarm()
-			a.sup.Stop()
-			if err := a.sup.SetBinary(bin); err != nil {
-				a.setMsg("切换核心失败：%v", err)
-				return
-			}
-			next := a.settings()
-			a.stateMu.Lock()
-			a.coreBin = bin
-			a.cli = core.NewClient(fmt.Sprintf("http://127.0.0.1:%d", ctrl), next.ControllerSecret)
-			a.px = sysproxy.New(a.store.StateDir, mixed)
-			a.stateMu.Unlock()
-			a.proxyManager().BeginSession()
-			a.mu.Lock()
-			a.coreOK = false
-			a.mu.Unlock()
-			a.applyConfig()
-			if wasArmed && !next.TUNEnabled && a.coreHealthy() {
-				a.proxyManager().Arm()
-			}
-		}
+		a.setMsg("设置已应用")
 		a.refreshTray()
 	})
 }

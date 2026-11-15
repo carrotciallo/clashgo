@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"slices"
 
 	"github.com/carrotciallo/clashgo/internal/config"
@@ -24,6 +25,9 @@ func (a *App) settings() config.Settings {
 func (a *App) changeSettings(change func(*config.Settings)) error {
 	a.stateMu.Lock()
 	defer a.stateMu.Unlock()
+	if a.settingsBusy {
+		return fmt.Errorf("配置事务进行中，请稍后重试")
+	}
 	next := a.set
 	next.Services = slices.Clone(next.Services)
 	next.CollapsedSubs = slices.Clone(next.CollapsedSubs)
