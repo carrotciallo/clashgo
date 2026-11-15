@@ -143,7 +143,7 @@ func (r *Registry) Find(name string) *Subscription {
 func (r *Registry) Sources(providersDir string) []config.ProviderSource {
 	out := make([]config.ProviderSource, 0, len(r.Subs))
 	for _, s := range r.Subs {
-		src := config.ProviderSource{Name: s.Name, URL: s.URL, Split: s.Split}
+		src := config.ProviderSource{Name: s.Name, URL: s.URL, Split: s.Split, Local: s.Local, Managed: true}
 		if s.Split {
 			if body, err := os.ReadFile(filepath.Join(providersDir, s.Name+".plumbing.yaml")); err == nil {
 				src.InlineYAML = ProviderItems(body)

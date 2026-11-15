@@ -201,9 +201,12 @@ func (a *App) renderAndInstall() error {
 	if err != nil {
 		return fmt.Errorf("读取主配置失败：%w", err)
 	}
-	rendered := config.Render(master, a.reg.Sources(a.store.ProvidersDir()), a.set)
+	rendered, err := config.RenderChecked(master, a.reg.Sources(a.store.ProvidersDir()), a.set)
+	if err != nil {
+		return fmt.Errorf("渲染配置失败：%w", err)
+	}
 	tmp := a.store.RenderedPath() + ".new"
-	if err := os.WriteFile(tmp, []byte(rendered), 0o644); err != nil {
+	if err := os.WriteFile(tmp, []byte(rendered), 0o600); err != nil {
 		return fmt.Errorf("写渲染配置失败：%w", err)
 	}
 	if err := core.ValidateConfig(a.coreBin, a.store.RuntimeDir(), tmp); err != nil {

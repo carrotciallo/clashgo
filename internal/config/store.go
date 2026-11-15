@@ -43,8 +43,12 @@ type Settings struct {
 
 // ProviderSource is what rendering needs to know about a subscription.
 type ProviderSource struct {
-	Name string
-	URL  string
+	Name  string
+	URL   string
+	Local bool
+	// Managed means the application owns fetching and validation. The core
+	// must not overwrite its sanitized cache with a second HTTP download.
+	Managed bool
 	// Split marks a subscription whose payload was a whole client
 	// config, flattened at fetch time (see subs.SplitFullConfig).
 	// InlineYAML then holds the flattened nodes' dialer plumbing

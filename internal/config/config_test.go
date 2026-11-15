@@ -122,7 +122,7 @@ func TestRulesRoundTrip(t *testing.T) {
 
 func TestProviderFiltersExcludeNotices(t *testing.T) {
 	out := Render(DefaultMaster, []ProviderSource{{Name: "ky", URL: "https://example.com/sub"}}, Settings{MixedPort: 7897, ControllerPort: 9097})
-	if !strings.Contains(out, "exclude-type: \"Direct|Reject\"") {
+	if !strings.Contains(out, "exclude-type: \"direct|reject\"") {
 		t.Error("provider block missing exclude-type")
 	}
 	if !strings.Contains(out, "exclude-filter:") || !strings.Contains(out, "订阅链接") {
@@ -174,7 +174,7 @@ func TestTunDisabledByDefault(t *testing.T) {
 func TestTunEnabledInjectsBlock(t *testing.T) {
 	in := "mixed-port: 7890\ndns:\n  enable: true\nrules:\n  - MATCH,DIRECT\n"
 	out := forceRuntimeKeys(in, Settings{MixedPort: 7897, ControllerPort: 9097, TUNEnabled: true})
-	for _, want := range []string{"tun:", "enable: true", "stack: gvisor", "auto-route: true", "mtu: 1500", "dns-hijack:", "any:53", "listen: 0.0.0.0:1053"} {
+	for _, want := range []string{"tun:", "enable: true", "stack: gvisor", "auto-route: true", "mtu: 1500", "dns-hijack:", "any:53", "listen: 127.0.0.1:1053"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("rendered config missing %q:\n%s", want, out)
 		}
@@ -184,7 +184,7 @@ func TestTunEnabledInjectsBlock(t *testing.T) {
 func TestTunEnabledKeepsMasterBlock(t *testing.T) {
 	in := "mixed-port: 7890\ntun:\n  enable: false\n  stack: system\n  mtu: 1400\nrules:\n  - MATCH,DIRECT\n"
 	out := forceRuntimeKeys(in, Settings{MixedPort: 7897, ControllerPort: 9097, TUNEnabled: true})
-	if !strings.Contains(out, "enable: true") || !strings.Contains(out, "stack: system") || !strings.Contains(out, "mtu: 1400") {
+	if !strings.Contains(out, "enable: true") || !strings.Contains(out, "stack: system") || !strings.Contains(out, "mtu: 1500") || strings.Contains(out, "mtu: 1400") {
 		t.Errorf("master tun block not preserved/enabled:\n%s", out)
 	}
 	if !strings.Contains(out, "dns-hijack:") {
