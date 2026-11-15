@@ -45,6 +45,7 @@ type App struct {
 	// any window closes) and by requestQuit.
 	quitting bool
 
+	renderMu    sync.Mutex
 	mu          sync.Mutex
 	page        int
 	msg         string
@@ -193,6 +194,12 @@ func (a *App) snapshot() (msg string, busy, coreOK bool, coreErr, egress string,
 // the core, and installs it. A failure at any step leaves the
 // previously installed config fully in place.
 func (a *App) renderAndInstall() error {
+	return a.installRuntime(true)
+}
+
+func (a *App) installRuntime(reload bool) error {
+	a.renderMu.Lock()
+	defer a.renderMu.Unlock()
 	// Geodata must be in the core home before ANY mihomo invocation,
 	// including validation — otherwise the core blocks trying to
 	// download it (Phase 1 bootstrap bug, found live).
@@ -205,18 +212,13 @@ func (a *App) renderAndInstall() error {
 	if err != nil {
 		return fmt.Errorf("渲染配置失败：%w", err)
 	}
-	tmp := a.store.RenderedPath() + ".new"
-	if err := os.WriteFile(tmp, []byte(rendered), 0o600); err != nil {
-		return fmt.Errorf("写渲染配置失败：%w", err)
+	var activate func(string) error
+	if reload && a.sup.Running() {
+		activate = a.cli.ReloadConfig
 	}
-	if err := core.ValidateConfig(a.coreBin, a.store.RuntimeDir(), tmp); err != nil {
-		_ = os.Remove(tmp)
-		return fmt.Errorf("配置校验未过：%w", err)
-	}
-	if err := os.Rename(tmp, a.store.RenderedPath()); err != nil {
-		return fmt.Errorf("安装新配置失败：%w", err)
-	}
-	return nil
+	return config.InstallRuntime(a.store.RenderedPath(), rendered, func(path string) error {
+		return core.ValidateConfig(a.coreBin, a.store.RuntimeDir(), path)
+	}, activate)
 }
 
 // applyConfig renders, validates, installs and (if running) reloads the
@@ -230,11 +232,6 @@ func (a *App) applyConfig() {
 		return
 	}
 	if a.sup.Running() {
-		if err := a.cli.ReloadConfig(a.store.RenderedPath()); err != nil {
-			a.setMsg("配置已更新，但热重载失败（%v），重启核心…", err)
-			a.startCore()
-			return
-		}
 		a.setMsg("配置已生效")
 	} else {
 		a.startCore()
@@ -247,7 +244,7 @@ func (a *App) applyConfig() {
 // of a hot reload, for changes a reload cannot apply (TUN). Reports
 // whether the core ended up healthy on the new config.
 func (a *App) applyConfigRestart() bool {
-	if err := a.renderAndInstall(); err != nil {
+	if err := a.installRuntime(false); err != nil {
 		a.setMsg("配置未生效，旧配置保持不变：%v", err)
 		return false
 	}
@@ -322,11 +319,19 @@ func (a *App) startCore() {
 		return
 	}
 	if err := a.cli.WaitReady(20 * time.Second); err != nil {
+		a.sup.Stop()
 		a.mu.Lock()
 		a.coreOK = false
 		a.coreErr = err.Error() + "\n" + a.sup.LogTail(8)
 		a.mu.Unlock()
 		a.setMsg("核心未就绪，未接管系统代理。日志尾部见概览页。")
+		return
+	}
+	if !a.sup.Running() {
+		a.setMsg("核心在就绪检查期间退出")
+		a.mu.Lock()
+		a.coreOK = false
+		a.mu.Unlock()
 		return
 	}
 	a.mu.Lock()
@@ -875,7 +880,10 @@ func (a *App) switchProfile(name string) {
 		a.set.ActiveProfile = name
 		a.store.SetActiveProfile(name)
 		if err := a.store.SaveSettings(a.set); err != nil {
+			a.set.ActiveProfile = old
+			a.store.SetActiveProfile(old)
 			a.setMsg("保存配置选择失败：%v", err)
+			return
 		}
 		if err := a.renderAndInstall(); err != nil {
 			a.set.ActiveProfile = old
@@ -884,12 +892,14 @@ func (a *App) switchProfile(name string) {
 			a.setMsg("配置未切换，新配置校验不过：%v", err)
 			return
 		}
-		if a.sup.Running() {
-			if err := a.cli.ReloadConfig(a.store.RenderedPath()); err != nil {
-				a.startCore()
-			}
-		} else {
+		if !a.sup.Running() {
 			a.startCore()
+			a.mu.Lock()
+			ok := a.coreOK
+			a.mu.Unlock()
+			if !ok {
+				return
+			}
 		}
 		a.setMsg("已切换到配置「%s」", profileDisplayName(name))
 		a.refreshProxies()
