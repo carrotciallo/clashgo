@@ -1,6 +1,7 @@
 package core
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"net/http"
@@ -97,6 +98,10 @@ rules: ["MATCH,DIRECT"]
 	client := NewClient("http://127.0.0.1:"+strconv.Itoa(ctrl), st.ControllerSecret)
 	if err := client.WaitReady(5 * time.Second); err != nil {
 		t.Fatal(err)
+	}
+	runtimeCapture, err := client.CaptureConfig(context.Background())
+	if err != nil || runtimeCapture.MixedPort != mixed || runtimeCapture.TUN.Enable {
+		t.Fatalf("runtime capture state mismatch: %+v, %v", runtimeCapture, err)
 	}
 	providers, err := client.Providers()
 	if err != nil || len(providers["fixture"]) != 1 {
