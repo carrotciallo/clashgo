@@ -172,12 +172,17 @@ func Fetch(ctx context.Context, sub *Subscription, providersDir string) error {
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("HTTP %s", resp.Status)
 	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 32<<20))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxPayloadSize+1))
 	if err != nil {
 		return err
 	}
-	parseUserinfo(resp.Header.Get("Subscription-Userinfo"), sub)
-	return ingest(sub, body, providersDir)
+	candidate := *sub
+	parseUserinfo(resp.Header.Get("Subscription-Userinfo"), &candidate)
+	if err := ingest(&candidate, body, providersDir); err != nil {
+		return err
+	}
+	*sub = candidate
+	return nil
 }
 
 // IngestLocal installs pasted or file-based subscription content
@@ -200,7 +205,7 @@ func parseUserinfo(h string, sub *Subscription) {
 			continue
 		}
 		v, err := strconv.ParseInt(strings.TrimSpace(kv[1]), 10, 64)
-		if err != nil {
+		if err != nil || v < 0 {
 			continue
 		}
 		switch strings.TrimSpace(kv[0]) {
@@ -220,43 +225,22 @@ func parseUserinfo(h string, sub *Subscription) {
 // provider file, splitting full client configs on the way. Any
 // rejection leaves the previous file untouched.
 func ingest(sub *Subscription, body []byte, providersDir string) error {
-	if !looksLikeProvider(body) {
-		return fmt.Errorf("返回内容不像订阅（没有 proxies 列表）")
+	if !ValidName(sub.Name) {
+		return fmt.Errorf("无效订阅名")
 	}
-	payload := body
-	var plumbing []byte
-	if providerYAML, plumbingYAML, names, split := SplitFullConfig(body); split {
-		payload = providerYAML
-		plumbing = plumbingYAML
-		sub.Split = true
-		sub.ProxyNames = names
-		sub.NodeCount = len(names)
-	} else {
-		sub.Split = false
-		sub.ProxyNames = nil
-		sub.NodeCount = CountNodes(body)
-	}
-	if err := os.MkdirAll(providersDir, 0o755); err != nil {
+	payload, plumbing, names, split, err := preparePayload(body)
+	if err != nil {
 		return err
 	}
-	dst := filepath.Join(providersDir, sub.Name+".yaml")
-	tmp := dst + ".tmp"
-	if err := os.WriteFile(tmp, payload, 0o644); err != nil {
+	if err := os.MkdirAll(providersDir, 0o700); err != nil {
 		return err
 	}
-	if err := os.Rename(tmp, dst); err != nil {
+	if err := installPool(providersDir, sub.Name, payload, plumbing); err != nil {
 		return err
 	}
-	// The plumbing sidecar lives and dies with the split.
-	plumbPath := filepath.Join(providersDir, sub.Name+".plumbing.yaml")
-	if len(plumbing) > 0 {
-		tmp := plumbPath + ".tmp"
-		if err := os.WriteFile(tmp, plumbing, 0o644); err == nil {
-			_ = os.Rename(tmp, plumbPath)
-		}
-	} else {
-		_ = os.Remove(plumbPath)
-	}
+	sub.Split = split
+	sub.ProxyNames = names
+	sub.NodeCount = len(names)
 	sub.UpdatedAt = time.Now()
 	sub.LastError = ""
 	return nil
@@ -274,23 +258,11 @@ func looksLikeProvider(body []byte) bool {
 // CountNodes estimates the node count of a provider payload by counting
 // list entries under the proxies: key.
 func CountNodes(body []byte) int {
-	n := 0
-	inProxies := false
-	for _, ln := range strings.Split(string(body), "\n") {
-		if strings.HasPrefix(ln, "proxies:") {
-			inProxies = true
-			continue
-		}
-		if inProxies {
-			t := strings.TrimSpace(ln)
-			if strings.HasPrefix(t, "- ") || t == "-" {
-				n++
-			} else if ln != "" && !strings.HasPrefix(ln, " ") && !strings.HasPrefix(ln, "\t") {
-				break
-			}
-		}
+	nodes, err := decodePool(body)
+	if err != nil {
+		return 0
 	}
-	return n
+	return len(nodes)
 }
 
 // ProviderFileExists reports whether a subscription has a downloaded
