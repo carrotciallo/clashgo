@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -28,8 +29,35 @@ type dnsEntry struct {
 // dnsTracker folds mihomo's debug DNS log lines into completed
 // entries. The core logs one "resolve" line per nameserver tried
 // and one result line from the winner; cache hits arrive whole.
+const dnsPendingLimit = 1024
+const dnsPendingTTL = 30 * time.Second
+
 type dnsTracker struct {
 	pending map[string]time.Time
+}
+
+func (t *dnsTracker) expire(now time.Time) {
+	for key, start := range t.pending {
+		if now.Sub(start) > dnsPendingTTL {
+			delete(t.pending, key)
+		}
+	}
+}
+func (t *dnsTracker) remember(key string, now time.Time) {
+	if _, ok := t.pending[key]; ok {
+		return
+	}
+	if len(t.pending) >= dnsPendingLimit {
+		var oldest string
+		var at time.Time
+		for k, v := range t.pending {
+			if oldest == "" || v.Before(at) {
+				oldest, at = k, v
+			}
+		}
+		delete(t.pending, oldest)
+	}
+	t.pending[key] = now
 }
 
 func newDNSTracker() *dnsTracker {
@@ -39,6 +67,7 @@ func newDNSTracker() *dnsTracker {
 // feed consumes one log payload; it returns a completed entry or
 // nil when the line only opens a query (or is not DNS at all).
 func (t *dnsTracker) feed(payload string, now time.Time) *dnsEntry {
+	t.expire(now)
 	if !strings.HasPrefix(payload, "[DNS] ") {
 		return nil
 	}
@@ -51,6 +80,7 @@ func (t *dnsTracker) feed(payload string, now time.Time) *dnsEntry {
 		if !ok {
 			return nil
 		}
+		delete(t.pending, host+"|"+qtype)
 		return &dnsEntry{At: now, Host: host, Type: qtype, Result: firstResult(ips), Cached: true, Ms: 0}
 	}
 	if strings.HasPrefix(body, "resolve ") {
@@ -73,9 +103,7 @@ func (t *dnsTracker) feed(payload string, now time.Time) *dnsEntry {
 		f := strings.Fields(rest)
 		if len(f) >= 4 && f[2] == "from" {
 			key := f[0] + "|" + f[1]
-			if _, ok := t.pending[key]; !ok {
-				t.pending[key] = now
-			}
+			t.remember(key, now)
 		}
 		return nil
 	}
@@ -129,25 +157,20 @@ func firstResult(ips []string) string {
 	return ips[0]
 }
 
-// dnsVia labels which nameserver path served a query: the main
-// nameserver pair rides the proxy; the policy nameservers for
-// domestic domains go direct.
+// Debug logs identify a resolver, not its routing decision. Never infer
+// DIRECT/proxy from an IP address; omit path/query/credentials from display.
 func dnsVia(server string) string {
-	s := server
-	if i := strings.Index(s, "://"); i >= 0 {
-		s = s[i+3:]
+	if !strings.Contains(server, "://") {
+		server = "dns://" + server
 	}
-	host := s
-	if i := strings.IndexAny(host, ":/"); i >= 0 {
-		host = host[:i]
+	u, err := url.Parse(server)
+	if err != nil {
+		return "未知"
 	}
-	switch host {
-	case "1.1.1.1", "8.8.8.8", "dns.google", "cloudflare-dns.com":
-		return "代理"
-	case "dns.alidns.com", "doh.pub", "223.5.5.5", "223.6.6.6", "119.29.29.29":
-		return "直连"
+	if host := u.Hostname(); host != "" {
+		return host
 	}
-	return host
+	return "未知"
 }
 
 // dnsLogLoop keeps a debug-level subscription to the core's log
@@ -171,14 +194,39 @@ func (a *App) dnsLogStream(ctx context.Context, tracker *dnsTracker) {
 	if cli == nil {
 		return
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, cli.Base+"/logs?level=debug", nil)
+	pid := 0
+	if a.sup != nil {
+		pid = a.sup.PID()
+	}
+	streamCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		tick := time.NewTicker(250 * time.Millisecond)
+		defer tick.Stop()
+		for {
+			select {
+			case <-streamCtx.Done():
+				return
+			case <-tick.C:
+				if a.client() != cli || (a.sup != nil && a.sup.PID() != pid) {
+					cancel()
+					return
+				}
+			}
+		}
+	}()
+	defer func() { cancel(); <-done }()
+	req, err := http.NewRequestWithContext(streamCtx, http.MethodGet, cli.Base+"/logs?level=debug", nil)
 	if err != nil {
 		return
 	}
 	if cli.Secret != "" {
 		req.Header.Set("Authorization", "Bearer "+cli.Secret)
 	}
-	resp, err := (&http.Client{}).Do(req)
+	transport := &http.Transport{ResponseHeaderTimeout: 5 * time.Second}
+	defer transport.CloseIdleConnections()
+	resp, err := (&http.Client{Transport: transport}).Do(req)
 	if err != nil {
 		return
 	}
@@ -189,6 +237,9 @@ func (a *App) dnsLogStream(ctx context.Context, tracker *dnsTracker) {
 	sc := bufio.NewScanner(resp.Body)
 	sc.Buffer(make([]byte, 64*1024), 1024*1024)
 	for sc.Scan() {
+		if streamCtx.Err() != nil || a.client() != cli || (a.sup != nil && a.sup.PID() != pid) {
+			return
+		}
 		var line struct {
 			Payload string `json:"payload"`
 		}
@@ -220,7 +271,7 @@ func (a *App) dnsLogView(c *ui.Context) {
 		txt(c, "时间", fsMicro, true, colFaint).Width(64)
 		txt(c, "域名", fsMicro, true, colFaint).Grow(1)
 		txt(c, "类型", fsMicro, true, colFaint).Width(40).TextAlign(ui.End)
-		txt(c, "发起", fsMicro, true, colFaint).Width(44).TextAlign(ui.End)
+		txt(c, "解析器", fsMicro, true, colFaint).Width(130).TextAlign(ui.End)
 		txt(c, "结果", fsMicro, true, colFaint).Width(170)
 		txt(c, "耗时", fsMicro, true, colFaint).Width(58)
 	})
@@ -241,7 +292,7 @@ func (a *App) dnsLogView(c *ui.Context) {
 			num(c, e.At.Format("15:04:05"), fsSmall, false, colFaint).Width(64)
 			txt(c, e.Host, fsSmall, true, colText).Grow(1).SingleLine()
 			txt(c, e.Type, fsSmall, false, colMuted).Width(40).TextAlign(ui.End)
-			txt(c, orDash(e.Via), fsSmall, false, colMuted).Width(44).TextAlign(ui.End)
+			txt(c, orDash(e.Via), fsSmall, false, colMuted).Width(130).SingleLine().TextAlign(ui.End)
 			ui.Row(c).Width(170).Gap(6).AlignItems(ui.Center).Children(func() {
 				if e.Cached {
 					tag(c, "缓存", colMuted)

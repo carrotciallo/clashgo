@@ -21,7 +21,7 @@ func TestDNSTrackerResultPairsLatency(t *testing.T) {
 	if e == nil {
 		t.Fatal("result line produced no entry")
 	}
-	if e.Host != "www.baidu.com" || e.Type != "A" || e.Result != "183.2.172.177" || e.Via != "直连" || e.Ms != 19 || e.Cached {
+	if e.Host != "www.baidu.com" || e.Type != "A" || e.Result != "183.2.172.177" || e.Via != "doh.pub" || e.Ms != 19 || e.Cached {
 		t.Fatalf("entry = %+v", e)
 	}
 }
@@ -31,7 +31,7 @@ func TestDNSTrackerProxyViaAndCacheHit(t *testing.T) {
 	t0 := time.Date(2026, 11, 12, 8, 16, 21, 0, time.Local)
 	tr.feed("[DNS] resolve www.wikipedia.org A from https://8.8.8.8:443/dns-query", t0)
 	e := tr.feed("[DNS] www.wikipedia.org --> [103.102.166.224] A from https://1.1.1.1:443/dns-query", t0.Add(87*time.Millisecond))
-	if e == nil || e.Via != "代理" || e.Ms != 87 {
+	if e == nil || e.Via != "1.1.1.1" || e.Ms != 87 {
 		t.Fatalf("proxy entry = %+v", e)
 	}
 	e = tr.feed("[DNS] cache hit www.wikipedia.org --> [103.102.166.224] A, expire at 2026-11-12 08:19:12", t0)
