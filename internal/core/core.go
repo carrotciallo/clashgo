@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -20,17 +21,22 @@ type Supervisor struct {
 	HomeDir string
 	LogPath string
 
-	cmd *exec.Cmd
+	mu          sync.Mutex
+	cmd         *exec.Cmd
+	done        chan struct{}
+	stopTimeout time.Duration
 }
 
 func (s *Supervisor) Start(configFile string) error {
-	if s.Running() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.cmd != nil {
 		return fmt.Errorf("core already running")
 	}
 	if err := os.MkdirAll(s.HomeDir, 0o755); err != nil {
 		return err
 	}
-	logf, err := os.Create(s.LogPath)
+	logf, err := os.OpenFile(s.LogPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
 	if err != nil {
 		return err
 	}
@@ -43,22 +49,53 @@ func (s *Supervisor) Start(configFile string) error {
 		return err
 	}
 	s.cmd = cmd
-	go func() { _ = cmd.Wait(); logf.Close() }()
+	done := make(chan struct{})
+	s.done = done
+	go func() {
+		_ = cmd.Wait()
+		_ = logf.Close()
+		s.mu.Lock()
+		s.cmd = nil
+		close(done)
+		s.mu.Unlock()
+	}()
 	return nil
 }
 
+// Stop reaps the child before returning, escalating after a bounded grace
+// period. Never read exec.Cmd.ProcessState concurrently with Cmd.Wait.
 func (s *Supervisor) Stop() {
-	if s.cmd != nil && s.cmd.Process != nil {
-		_ = s.cmd.Process.Signal(syscall.SIGTERM)
+	s.mu.Lock()
+	cmd, done, timeout := s.cmd, s.done, s.stopTimeout
+	s.mu.Unlock()
+	if cmd == nil {
+		return
+	}
+	if timeout <= 0 {
+		timeout = 3 * time.Second
+	}
+	_ = cmd.Process.Signal(syscall.SIGTERM)
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case <-done:
+		return
+	case <-timer.C:
+		_ = cmd.Process.Kill()
+		<-done
 	}
 }
 
 func (s *Supervisor) Running() bool {
-	return s.cmd != nil && s.cmd.Process != nil && s.cmd.ProcessState == nil
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.cmd != nil
 }
 
 func (s *Supervisor) PID() int {
-	if s.cmd != nil && s.cmd.Process != nil {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.cmd != nil {
 		return s.cmd.Process.Pid
 	}
 	return 0
@@ -126,9 +163,7 @@ func EnsureTunCaps(binPath string) error {
 // the executable (bundled), then PATH.
 func FindCore(configured string) string {
 	if configured != "" {
-		if _, err := os.Stat(configured); err == nil {
-			return configured
-		}
+		return configured // explicit configuration must fail visibly, not fall back
 	}
 	if exe, err := os.Executable(); err == nil {
 		p := filepath.Join(filepath.Dir(exe), "mihomo")
