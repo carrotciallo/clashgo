@@ -642,9 +642,9 @@ func (a *App) testDelay(group string) {
 
 // testNodeDelay measures one node and files the result in the
 // 节点选择 delay table the node rows already read (0 = timeout).
-func (a *App) testNodeDelay(name string) {
+func (a *App) testNodeDelay(provider, name string) {
 	go func() {
-		d, err := a.cli.ProxyDelay(name, "https://www.gstatic.com/generate_204", 5000)
+		d, err := a.cli.ProviderDelay(provider, name, "https://www.gstatic.com/generate_204", 5000)
 		a.mu.Lock()
 		if a.delays == nil {
 			a.delays = map[string]map[string]int{}

@@ -299,7 +299,7 @@ func (a *App) nodeDetail(c *ui.Context, s subs.Subscription, p core.Proxy, delay
 		tag(c, delayText, delayTone)
 		ui.Box(c).Grow(1)
 		if ov.Button(c, "测速此节点", ov.ButtonOutline).Clicked() {
-			a.testNodeDelay(p.Name)
+			a.testNodeDelay(s.Name, p.Name)
 		}
 	})
 }

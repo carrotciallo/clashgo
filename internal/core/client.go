@@ -2,9 +2,11 @@ package core
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -23,12 +25,19 @@ func NewClient(base, secret string) *Client {
 }
 
 func (c *Client) do(method, path string, body any) ([]byte, error) {
+	return c.doContext(context.Background(), method, path, body)
+}
+
+func (c *Client) doContext(ctx context.Context, method, path string, body any) ([]byte, error) {
 	var rdr io.Reader
 	if body != nil {
-		b, _ := json.Marshal(body)
+		b, err := json.Marshal(body)
+		if err != nil {
+			return nil, err
+		}
 		rdr = bytes.NewReader(b)
 	}
-	req, err := http.NewRequest(method, c.Base+path, rdr)
+	req, err := http.NewRequestWithContext(ctx, method, c.Base+path, rdr)
 	if err != nil {
 		return nil, err
 	}
@@ -43,9 +52,13 @@ func (c *Client) do(method, path string, body any) ([]byte, error) {
 		return nil, err
 	}
 	defer resp.Body.Close()
-	b, err := io.ReadAll(resp.Body)
+	const maxResponse = 16 << 20
+	b, err := io.ReadAll(io.LimitReader(resp.Body, maxResponse+1))
 	if err != nil {
 		return nil, err
+	}
+	if len(b) > maxResponse {
+		return nil, fmt.Errorf("controller response exceeds 16 MiB")
 	}
 	if resp.StatusCode >= 300 {
 		return b, fmt.Errorf("%s %s: %s", method, path, resp.Status)
@@ -55,15 +68,22 @@ func (c *Client) do(method, path string, body any) ([]byte, error) {
 
 // WaitReady polls /version until the core answers or the deadline hits.
 func (c *Client) WaitReady(timeout time.Duration) error {
-	deadline := time.Now().Add(timeout)
-	var lastErr error
-	for time.Now().Before(deadline) {
-		if _, lastErr = c.do(http.MethodGet, "/version", nil); lastErr == nil {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	for {
+		b, err := c.doContext(ctx, http.MethodGet, "/version", nil)
+		var version struct {
+			Version string `json:"version"`
+		}
+		if err == nil && json.Unmarshal(b, &version) == nil && version.Version != "" {
 			return nil
 		}
-		time.Sleep(250 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("core did not become ready: %w", ctx.Err())
+		case <-time.After(250 * time.Millisecond):
+		}
 	}
-	return fmt.Errorf("core did not become ready: %w", lastErr)
 }
 
 // Proxy is one entry of GET /proxies: a node or a group.
@@ -93,6 +113,9 @@ func (c *Client) Proxies() (map[string]Proxy, error) {
 		return nil, err
 	}
 	out := resp.Proxies
+	if out == nil {
+		out = make(map[string]Proxy)
+	}
 	pb, err := c.do(http.MethodGet, "/providers/proxies", nil)
 	if err != nil {
 		return out, nil // provider view is best-effort
@@ -158,8 +181,17 @@ func (c *Client) GroupDelay(group, testURL string, timeoutMs int) (map[string]in
 
 // ProxyDelay measures a single proxy's delay (milliseconds).
 func (c *Client) ProxyDelay(name, testURL string, timeoutMs int) (int, error) {
+	return c.delay("/proxies/"+url.PathEscape(name)+"/delay", testURL, timeoutMs)
+}
+
+// ProviderDelay tests a provider-only node, which is absent from /proxies.
+func (c *Client) ProviderDelay(provider, name, testURL string, timeoutMs int) (int, error) {
+	return c.delay("/providers/proxies/"+url.PathEscape(provider)+"/"+url.PathEscape(name)+"/healthcheck", testURL, timeoutMs)
+}
+
+func (c *Client) delay(path, testURL string, timeoutMs int) (int, error) {
 	q := url.Values{"url": {testURL}, "timeout": {fmt.Sprint(timeoutMs)}}
-	b, err := c.do(http.MethodGet, "/proxies/"+url.PathEscape(name)+"/delay?"+q.Encode(), nil)
+	b, err := c.do(http.MethodGet, path+"?"+q.Encode(), nil)
 	if err != nil {
 		return 0, err
 	}
@@ -275,7 +307,7 @@ func (c *Client) Connections() ([]Connection, error) {
 			host = cn.Metadata.DestinationIP
 		}
 		if cn.Metadata.DestinationPort != "" {
-			host += ":" + cn.Metadata.DestinationPort
+			host = net.JoinHostPort(host, cn.Metadata.DestinationPort)
 		}
 		out = append(out, Connection{
 			ID: cn.ID, Target: host, Network: cn.Metadata.Network,
