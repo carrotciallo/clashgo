@@ -1260,14 +1260,14 @@ func (a *App) addSubscription() {
 				a.setMsg("添加订阅失败：%v", err)
 				return
 			}
-			sub := a.reg.Find(name)
-			if err := subs.IngestLocal(sub, body, a.store.ProvidersDir()); err != nil {
-				sub.LastError = err.Error()
-				_ = a.reg.Save()
+			if err := a.reg.Ingest(name, body, a.store.ProvidersDir()); err != nil {
 				a.setMsg("订阅内容不可用：%v", err)
 				return
 			}
-			_ = a.reg.Save()
+			sub := a.reg.Find(name)
+			if sub == nil {
+				return
+			}
 			a.subName, a.subText, a.subFile = "", "", ""
 			a.setMsg("订阅 %s 已添加（%d 个节点），应用配置…", name, sub.NodeCount)
 			a.applyConfig()
@@ -1299,13 +1299,14 @@ func (a *App) fetchSubscription(name string, reRender bool) {
 	defer a.setBusy(false, "")
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	if err := subs.Fetch(ctx, sub, a.store.ProvidersDir()); err != nil {
-		sub.LastError = err.Error()
-		_ = a.reg.Save()
+	if err := a.reg.Fetch(ctx, name, a.store.ProvidersDir()); err != nil {
 		a.setMsg("订阅 %s 刷新失败（旧节点保留）：%v", name, err)
 		return
 	}
-	_ = a.reg.Save()
+	sub = a.reg.Find(name)
+	if sub == nil {
+		return
+	}
 	if reRender || sub.Split {
 		// Split subscriptions carry groups, not just a provider file:
 		// a provider reload is not enough, the config must re-render.

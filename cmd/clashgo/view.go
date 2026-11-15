@@ -583,9 +583,9 @@ func (a *App) pageOverview(c *ui.Context) {
 		miniCard(c, lucide.ScrollText(), "配置", func() {
 			txt(c, profileDisplayName(a.set.ActiveProfile), fsValue, true, colText).SingleLine()
 			rules := fmt.Sprintf("%d 条规则", facts.RuleCount)
-			caption(c, fmt.Sprintf("%d 个订阅 · %s", len(a.reg.Subs), rules))
+			caption(c, fmt.Sprintf("%d 个订阅 · %s", len(a.reg.Snapshot()), rules))
 		}, func() {
-			if u := firstQuotaSub(a.reg.Subs); u != nil {
+			if u := firstQuotaSub(a.reg.Snapshot()); u != nil {
 				pct := int(u.UsedBytes() * 100 / u.TotalBytes)
 				if pct > 100 {
 					pct = 100

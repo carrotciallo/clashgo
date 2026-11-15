@@ -25,7 +25,7 @@ func (a *App) pageProxies(c *ui.Context) {
 		delays[group] = maps.Clone(values)
 	}
 	a.mu.Unlock()
-	subsList := append([]subs.Subscription{}, a.reg.Subs...)
+	subsList := a.reg.Snapshot()
 	chain := a.egressChain()
 	leaf := ""
 	if len(chain) > 0 {

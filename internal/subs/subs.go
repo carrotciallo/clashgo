@@ -6,13 +6,11 @@ package subs
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -21,6 +19,7 @@ import (
 )
 
 type Subscription struct {
+	revision  uint64
 	Name      string    `json:"name"`
 	URL       string    `json:"url"`
 	UpdatedAt time.Time `json:"updatedAt,omitempty"`
@@ -44,95 +43,6 @@ type Subscription struct {
 	Local bool `json:"local,omitempty"`
 }
 
-type Registry struct {
-	path string
-	Subs []Subscription `json:"subscriptions"`
-}
-
-var nameRe = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
-
-// ValidName reports whether a name is safe as a provider key and as a
-// file name.
-func ValidName(name string) bool { return nameRe.MatchString(name) }
-
-func Load(path string) (*Registry, error) {
-	r := &Registry{path: path}
-	b, err := os.ReadFile(path)
-	if os.IsNotExist(err) {
-		return r, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	if err := json.Unmarshal(b, r); err != nil {
-		return nil, fmt.Errorf("subscriptions.json: %w", err)
-	}
-	r.path = path
-	return r, nil
-}
-
-func (r *Registry) Save() error {
-	b, err := json.MarshalIndent(r, "", "  ")
-	if err != nil {
-		return err
-	}
-	tmp := r.path + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o600); err != nil {
-		return err
-	}
-	return os.Rename(tmp, r.path)
-}
-
-func (r *Registry) Add(name, rawURL string) error {
-	if !ValidName(name) {
-		return fmt.Errorf("订阅名只能用字母、数字、下划线和连字符")
-	}
-	if !strings.HasPrefix(rawURL, "http://") && !strings.HasPrefix(rawURL, "https://") {
-		return fmt.Errorf("订阅地址必须以 http:// 或 https:// 开头")
-	}
-	for _, s := range r.Subs {
-		if s.Name == name {
-			return fmt.Errorf("已存在同名订阅 %s", name)
-		}
-	}
-	r.Subs = append(r.Subs, Subscription{Name: name, URL: rawURL})
-	return r.Save()
-}
-
-// AddLocal registers a content-based subscription (paste or file):
-// same name rules as Add, but no URL is stored.
-func (r *Registry) AddLocal(name string) error {
-	if !ValidName(name) {
-		return fmt.Errorf("订阅名只能用字母、数字、下划线和连字符")
-	}
-	for _, s := range r.Subs {
-		if s.Name == name {
-			return fmt.Errorf("已存在同名订阅 %s", name)
-		}
-	}
-	r.Subs = append(r.Subs, Subscription{Name: name, Local: true})
-	return r.Save()
-}
-
-func (r *Registry) Remove(name string) error {
-	for i, s := range r.Subs {
-		if s.Name == name {
-			r.Subs = append(r.Subs[:i], r.Subs[i+1:]...)
-			return r.Save()
-		}
-	}
-	return fmt.Errorf("没有订阅 %s", name)
-}
-
-func (r *Registry) Find(name string) *Subscription {
-	for i := range r.Subs {
-		if r.Subs[i].Name == name {
-			return &r.Subs[i]
-		}
-	}
-	return nil
-}
-
 // Sources adapts the registry to what config rendering needs. For
 // split subscriptions it also reads the plumbing file back and
 // exposes its proxies as inline YAML: rendering splices them into
@@ -141,8 +51,9 @@ func (r *Registry) Find(name string) *Subscription {
 // exclude-filter would unregister them; see SplitFullConfig).
 // A missing plumbing file yields no inline YAML.
 func (r *Registry) Sources(providersDir string) []config.ProviderSource {
-	out := make([]config.ProviderSource, 0, len(r.Subs))
-	for _, s := range r.Subs {
+	snapshot := r.Snapshot()
+	out := make([]config.ProviderSource, 0, len(snapshot))
+	for _, s := range snapshot {
 		src := config.ProviderSource{Name: s.Name, URL: s.URL, Split: s.Split, Local: s.Local, Managed: true}
 		if s.Split {
 			if body, err := os.ReadFile(filepath.Join(providersDir, s.Name+".plumbing.yaml")); err == nil {

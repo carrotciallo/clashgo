@@ -176,17 +176,15 @@ func (a *App) bootstrap(ctx context.Context) {
 	if a.healed {
 		a.setMsg("已修复上次异常退出留下的系统代理")
 	}
-	for _, s := range a.reg.Subs {
+	for _, s := range a.reg.Snapshot() {
 		if ctx.Err() != nil {
 			return
 		}
 		if s.Local || subs.ProviderFileExists(a.store.ProvidersDir(), s.Name) {
 			continue
 		}
-		sub := a.reg.Find(s.Name)
 		ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
-		if err := subs.Fetch(ctx, sub, a.store.ProvidersDir()); err != nil {
-			sub.LastError = err.Error()
+		if err := a.reg.Fetch(ctx, s.Name, a.store.ProvidersDir()); err != nil {
 			a.setMsg("订阅 %s 首次抓取失败：%v（可到节点页重试）", s.Name, err)
 		}
 		cancel()

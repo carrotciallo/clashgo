@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -59,6 +60,7 @@ type ProviderSource struct {
 }
 
 type Store struct {
+	mu        sync.RWMutex
 	ConfigDir string
 	StateDir  string
 	// activeProfile selects which file MasterPath resolves to (""
@@ -91,10 +93,7 @@ func NewStore() (*Store, error) {
 // Everything that reads or writes "the master config" (rendering,
 // snapshots, rule edits) goes through here and follows the switch.
 func (s *Store) MasterPath() string {
-	if s.activeProfile != "" {
-		return s.ProfilePath(s.activeProfile)
-	}
-	return filepath.Join(s.ConfigDir, "master.yaml")
+	return s.ProfilePath(s.ActiveProfile())
 }
 
 func (s *Store) ProfilesDir() string { return filepath.Join(s.ConfigDir, "profiles") }
@@ -106,11 +105,19 @@ func (s *Store) ProfilePath(name string) string {
 	return filepath.Join(s.ProfilesDir(), name+".yaml")
 }
 
-func (s *Store) ActiveProfile() string { return s.activeProfile }
+func (s *Store) ActiveProfile() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.activeProfile
+}
 
 // SetActiveProfile points MasterPath at the named profile (""
 // = built-in). Callers persist the choice in Settings themselves.
-func (s *Store) SetActiveProfile(name string) { s.activeProfile = name }
+func (s *Store) SetActiveProfile(name string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.activeProfile = name
+}
 
 func (s *Store) ProfileExists(name string) bool {
 	if name == "" {
@@ -269,11 +276,7 @@ func (s *Store) SaveMaster(content string) error {
 }
 
 func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, perm); err != nil {
-		return err
-	}
-	return os.Rename(tmp, path)
+	return WriteFileAtomic(path, data, perm)
 }
 
 func randomSecret() (string, error) {
