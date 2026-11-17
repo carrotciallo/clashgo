@@ -50,10 +50,16 @@ type App struct {
 	// framework quit) from a window close: closes hide to the tray,
 	// quits let the window die. Set from OnBeforeQuit (fires before
 	// any window closes) and by requestQuit.
-	quitting        atomic.Bool
-	quitDone        atomic.Bool
-	quitOnce        sync.Once
-	work            *core.Tasks
+	quitting atomic.Bool
+	quitDone atomic.Bool
+	quitOnce sync.Once
+	work     *core.Tasks
+	// Agent surface (agent*.go): event log, cached core version
+	// for status, and the status-file heartbeat counter.
+	events          *eventLog
+	coreVersion     string
+	coreVersionPID  int
+	statusTick      int
 	startupStarted  time.Time
 	startupFinished atomic.Bool
 
@@ -279,9 +285,11 @@ func (a *App) applyConfig() {
 	a.setBusy(true, "渲染并校验配置…")
 	defer a.setBusy(false, "")
 	if err := a.renderAndInstall(); err != nil {
+		a.emitEvent("config_rejected", map[string]any{"error": err.Error()})
 		a.setMsg("配置未生效，旧配置保持不变：%v", err)
 		return
 	}
+	a.emitEvent("config_applied", nil)
 	a.startupMark("config_validated")
 	if a.sup.Running() {
 		a.setMsg("配置已生效")
@@ -347,6 +355,7 @@ func (a *App) setCapture(tun bool) {
 				return
 			}
 		}
+		a.emitEvent("capture_switched", map[string]any{"tun": tun})
 		if tun {
 			a.setMsg("接管方式已切换：TUN")
 		} else {
@@ -373,6 +382,7 @@ func (a *App) startCore() {
 		a.mu.Lock()
 		a.coreOK, a.coreErr = false, err.Error()
 		a.mu.Unlock()
+		a.emitEvent("core_failed", map[string]any{"error": err.Error()})
 		a.setMsg("核心启动失败：%v", err)
 		return
 	}
@@ -390,10 +400,12 @@ func (a *App) startCore() {
 		a.coreOK = false
 		a.coreErr = err.Error() + "\n" + a.sup.LogTail(8)
 		a.mu.Unlock()
+		a.emitEvent("core_failed", map[string]any{"error": err.Error()})
 		a.setMsg("核心未就绪，未接管系统代理。日志尾部见概览页。")
 		return
 	}
 	if !a.sup.Running() {
+		a.emitEvent("core_failed", map[string]any{"error": "核心在就绪检查期间退出"})
 		a.setMsg("核心在就绪检查期间退出")
 		a.mu.Lock()
 		a.coreOK = false
@@ -404,6 +416,7 @@ func (a *App) startCore() {
 	a.coreOK, a.coreErr = true, ""
 	a.coreSince = time.Now()
 	a.mu.Unlock()
+	a.emitEvent("core_started", map[string]any{"pid": a.sup.PID(), "tun": a.settings().TUNEnabled})
 	// Capture modes are mutually exclusive: exactly one of system
 	// proxy / TUN owns the machine's traffic at any time. A quit in
 	// flight must win over a capture switch still landing (the two
@@ -579,6 +592,10 @@ func (a *App) pollLoop(ctx context.Context) {
 }
 
 func (a *App) pollTick(ticks *int) {
+	a.statusTick++
+	if a.statusTick%3 == 1 {
+		a.writeStatusFile()
+	}
 	a.mu.Lock()
 	open, ok := a.windowOpen, a.coreOK
 	a.mu.Unlock()
@@ -712,6 +729,7 @@ func (a *App) switchNode(group, name string) {
 			a.setMsg("切换失败：%v", err)
 			return
 		}
+		a.emitEvent("node_switched", map[string]any{"group": group, "node": name})
 		a.setMsg("已切换：%s → %s", group, name)
 		a.refreshProxies()
 		time.Sleep(600 * time.Millisecond)
@@ -769,20 +787,29 @@ func (a *App) testNodeDelay(provider, name string) {
 func (a *App) toggleCore() {
 	a.operate(func() {
 		if a.sup.Running() {
-			if !a.settings().TUNEnabled {
-				a.proxyManager().Disarm()
-			}
-			a.sup.Stop()
-			a.mu.Lock()
-			a.coreOK = false
-			a.coreSince = time.Time{}
-			a.mu.Unlock()
-			a.setMsg("核心已停止")
-			a.refreshTray()
+			a.stopCoreNow()
 			return
 		}
 		a.startCore()
 	})
+}
+
+// stopCoreNow stops the core and releases the capture. It runs with
+// the operation lock held (inside operate): stopping in system-proxy
+// mode disarms first, so nothing is left pointing at a dead port; in
+// TUN mode the parked (direct) settings already mean "no proxy".
+func (a *App) stopCoreNow() {
+	if !a.settings().TUNEnabled {
+		a.proxyManager().Disarm()
+	}
+	a.sup.Stop()
+	a.mu.Lock()
+	a.coreOK = false
+	a.coreSince = time.Time{}
+	a.mu.Unlock()
+	a.setMsg("核心已停止")
+	a.emitEvent("core_stopped", nil)
+	a.refreshTray()
 }
 
 // lanIP returns the primary LAN address: the first IPv4 on a
@@ -946,6 +973,7 @@ func (a *App) useNode(name string) {
 					a.setMsg("切换失败：%v", err)
 					return
 				}
+				a.emitEvent("node_switched", map[string]any{"group": "节点选择", "via": gname, "node": name})
 				a.setMsg("已切换：节点选择 → %s → %s", gname, name)
 				a.refreshProxies()
 				time.Sleep(600 * time.Millisecond)
@@ -1350,11 +1378,13 @@ func (a *App) fetchSubscription(name string, _ bool) error {
 	ctx, cancel := context.WithTimeout(a.appContext(), 60*time.Second)
 	defer cancel()
 	if err := a.reg.Fetch(ctx, name, a.store.ProvidersDir()); err != nil {
+		a.emitEvent("sub_refresh_failed", map[string]any{"name": name, "error": err.Error()})
 		a.setMsg("订阅 %s 刷新失败（旧节点保留）：%v", name, err)
 		return err
 	}
 	// Always re-render: a pool can gain or lose inline dialer plumbing.
 	if err := a.renderAndInstall(); err != nil {
+		a.emitEvent("sub_refresh_failed", map[string]any{"name": name, "error": err.Error()})
 		a.setMsg("订阅 %s 已下载，但运行配置未更新：%v", name, err)
 		return err
 	}
@@ -1364,6 +1394,11 @@ func (a *App) fetchSubscription(name string, _ bool) error {
 	if sub = a.reg.Find(name); sub != nil {
 		a.setMsg("订阅 %s 已更新（%d 个节点）", name, sub.NodeCount)
 	}
+	nodes := 0
+	if sub != nil {
+		nodes = sub.NodeCount
+	}
+	a.emitEvent("sub_refreshed", map[string]any{"name": name, "nodes": nodes})
 	return nil
 }
 
@@ -1485,6 +1520,7 @@ func (a *App) deleteRule(idx int) {
 }
 
 func (a *App) shutdown() {
+	a.emitEvent("app_quit", nil)
 	if a.work != nil {
 		a.work.Wait()
 	}
@@ -1498,6 +1534,7 @@ func (a *App) shutdown() {
 	if a.tray != nil {
 		a.tray.Destroy()
 	}
+	a.writeStatusFile()
 }
 
 func humanBytes(n int64) string {

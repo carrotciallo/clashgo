@@ -57,6 +57,9 @@ func detachFromTerminal() {
 }
 
 func main() {
+	if code, handled := runAgentCLI(os.Args[1:]); handled {
+		os.Exit(code)
+	}
 	detachFromTerminal()
 	log.SetFlags(log.Ltime)
 	startupStarted := time.Now()
@@ -138,6 +141,8 @@ func main() {
 	}
 	a.px.BeginSession()
 	a.startupMark("proxy_session_ready")
+	a.events = newEventLog(eventsPath(store))
+	go a.serveControl()
 
 	sigc := make(chan os.Signal, 2)
 	signal.Notify(sigc, syscall.SIGTERM, syscall.SIGINT)
@@ -206,4 +211,6 @@ func (a *App) bootstrap(ctx context.Context) {
 	a.work.Go(a.pollLoop)
 	a.work.Go(a.dnsLogLoop)
 	a.work.Go(a.subscriptionLoop)
+	a.emitEvent("app_started", map[string]any{"tun": a.settings().TUNEnabled, "profile": a.settings().ActiveProfile})
+	a.writeStatusFile()
 }

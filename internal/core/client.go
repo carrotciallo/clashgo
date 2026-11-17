@@ -413,6 +413,21 @@ func (c *Client) DNSQuery(name, qtype string) ([]DNSAnswer, error) {
 }
 
 // Ping measures one controller round-trip (GET /version).
+// Version returns the core's reported version string (GET /version).
+func (c *Client) Version(ctx context.Context) (string, error) {
+	b, err := c.doContext(ctx, http.MethodGet, "/version", nil)
+	if err != nil {
+		return "", err
+	}
+	var v struct {
+		Version string `json:"version"`
+	}
+	if err := json.Unmarshal(b, &v); err != nil {
+		return "", err
+	}
+	return v.Version, nil
+}
+
 func (c *Client) Ping() (time.Duration, error) {
 	t0 := time.Now()
 	if _, err := c.do(http.MethodGet, "/version", nil); err != nil {
