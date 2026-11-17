@@ -243,7 +243,7 @@ func cliLogs(store *config.Store, args []string) int {
 			rest := []string{}
 			for k, v := range rec {
 				if k != "kind" && k != "time" {
-					rest = append(rest, fmt.Sprintf("%s=%v", k, v))
+					rest = append(rest, fmt.Sprintf("%s=%s", k, eventValueString(v)))
 				}
 			}
 			fmt.Printf("%s %-18s %s\n", ts, kind, strings.Join(rest, " "))
@@ -253,6 +253,16 @@ func cliLogs(store *config.Store, args []string) int {
 		}
 	}
 	return exitOK
+}
+
+// eventValueString renders a decoded JSON value for the human log
+// form; integral numbers print without a decimal exponent (a pid
+// must not come out as 1.942286e+06).
+func eventValueString(v any) string {
+	if f, ok := v.(float64); ok && f == float64(int64(f)) {
+		return fmt.Sprintf("%d", int64(f))
+	}
+	return fmt.Sprintf("%v", v)
 }
 
 func cliWatch(store *config.Store) int {
