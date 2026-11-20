@@ -114,12 +114,23 @@ func mapping(root map[string]any, key string) (map[string]any, error) {
 	return m, nil
 }
 
+// CoreRoutingMark is stamped on every socket the core dials (proxy and
+// DIRECT alike) so the tun-only nft table can exempt the core's own egress.
+// cmd/tunonly-helper carries the same value; keep them in sync.
+const CoreRoutingMark = 0x4347
+
+// TunDeviceName replaces the core's default TUN device name ("Meta")
+// with one that reads as a second wired NIC, so interface listings
+// carry neither a product label nor an obvious tunnel name.
+const TunDeviceName = "enp7s0"
+
 func runtimeKeys(root map[string]any, st Settings) error {
 	root["mixed-port"] = st.MixedPort
 	root["external-controller"] = fmt.Sprintf("127.0.0.1:%d", st.ControllerPort)
 	root["secret"] = st.ControllerSecret
 	root["allow-lan"] = false
 	root["mode"] = "rule"
+	root["routing-mark"] = CoreRoutingMark
 	if _, exists := root["ipv6"]; !exists {
 		root["ipv6"] = false
 	}
@@ -135,7 +146,7 @@ func runtimeKeys(root map[string]any, st Settings) error {
 		if err != nil {
 			return err
 		}
-		tun["enable"], tun["mtu"] = st.TUNEnabled, 1500
+		tun["enable"], tun["mtu"], tun["device"] = st.TUNEnabled, 1500, TunDeviceName
 		if st.TUNEnabled {
 			for key, value := range map[string]any{"stack": "gvisor", "auto-route": true, "auto-detect-interface": true, "dns-hijack": []string{"any:53"}} {
 				if _, exists := tun[key]; !exists {

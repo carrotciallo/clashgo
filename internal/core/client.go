@@ -229,7 +229,8 @@ func (c *Client) TrafficTotals() (up, down int64, err error) {
 
 // CaptureConfig describes the live capture settings returned by GET /configs.
 type CaptureConfig struct {
-	MixedPort int `json:"mixed-port"`
+	Mode      string `json:"mode"`
+	MixedPort int    `json:"mixed-port"`
 	TUN       struct {
 		Enable bool   `json:"enable"`
 		Device string `json:"device"`

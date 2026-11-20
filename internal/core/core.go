@@ -20,11 +20,19 @@ type Supervisor struct {
 	BinPath string
 	HomeDir string
 	LogPath string
+	// LogSealed seals the core log to mode 0000 outside the open in
+	// Start (see OpenLogFile).
+	LogSealed bool
+
+	// OnUnexpectedExit, when set, runs after the child is reaped if
+	// the exit was not requested through Stop.
+	OnUnexpectedExit func()
 
 	mu          sync.Mutex
 	cmd         *exec.Cmd
 	done        chan struct{}
 	stopTimeout time.Duration
+	stopping    bool
 }
 
 func (s *Supervisor) Start(configFile string) error {
@@ -36,7 +44,7 @@ func (s *Supervisor) Start(configFile string) error {
 	if err := os.MkdirAll(s.HomeDir, 0o755); err != nil {
 		return err
 	}
-	logf, err := os.OpenFile(s.LogPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	logf, err := OpenLogFile(s.LogPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, s.LogSealed)
 	if err != nil {
 		return err
 	}
@@ -49,6 +57,7 @@ func (s *Supervisor) Start(configFile string) error {
 		return err
 	}
 	s.cmd = cmd
+	s.stopping = false
 	done := make(chan struct{})
 	s.done = done
 	go func() {
@@ -56,8 +65,13 @@ func (s *Supervisor) Start(configFile string) error {
 		_ = logf.Close()
 		s.mu.Lock()
 		s.cmd = nil
+		unexpected := !s.stopping
+		cb := s.OnUnexpectedExit
 		close(done)
 		s.mu.Unlock()
+		if unexpected && cb != nil {
+			cb()
+		}
 	}()
 	return nil
 }
@@ -66,6 +80,7 @@ func (s *Supervisor) Start(configFile string) error {
 // period. Never read exec.Cmd.ProcessState concurrently with Cmd.Wait.
 func (s *Supervisor) Stop() {
 	s.mu.Lock()
+	s.stopping = true
 	cmd, done, timeout := s.cmd, s.done, s.stopTimeout
 	s.mu.Unlock()
 	if cmd == nil {

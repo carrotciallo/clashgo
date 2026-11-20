@@ -40,6 +40,14 @@ type Settings struct {
 	// folded away on the nodes page (UI state, persisted so the
 	// fold survives restarts).
 	CollapsedSubs []string `json:"collapsedSubs,omitempty"`
+	// TunOnly keeps machine egress on the TUN device (see cmd/clashgo/tunonly.go).
+	TunOnly bool `json:"tunOnly,omitempty"`
+	// AgentSurface gates the control socket, agent CLI and status
+	// heartbeat. Defaults true when the key is absent (see LoadSettings).
+	AgentSurface bool `json:"agentSurface"`
+	// LogLock keeps the logs owner-only; off seals them to mode 0000
+	// (see cmd/clashgo/log_lock.go). Defaults true when absent.
+	LogLock bool `json:"logLock"`
 }
 
 // ProviderSource is what rendering needs to know about a subscription.
@@ -242,6 +250,12 @@ func (s *Store) LoadSettings() (Settings, error) {
 	if err := json.Unmarshal(b, &raw); err == nil {
 		if _, ok := raw["silentAutostart"]; !ok {
 			st.SilentAutostart = true
+		}
+		if _, ok := raw["agentSurface"]; !ok {
+			st.AgentSurface = true
+		}
+		if _, ok := raw["logLock"]; !ok {
+			st.LogLock = true
 		}
 	}
 	if st.MixedPort == 0 {
