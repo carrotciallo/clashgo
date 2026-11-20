@@ -180,6 +180,15 @@ func cliDryRun(store *config.Store, req ctrlRequest) int {
 			printAgentError("not_running", "无法读取节点列表")
 			return exitNoInstance
 		}
+		var policy struct{ SelectionError *ctrlError }
+		if err := json.Unmarshal(resp.Result, &policy); err != nil {
+			printAgentError("bad_response", "无法核实节点选择策略")
+			return exitFailed
+		}
+		if e := policy.SelectionError; e != nil {
+			printAgentError(e.Code, e.Message)
+			return exitFailed
+		}
 		plan["current"] = st.Selection.Node
 		plan["wouldChange"] = args["name"] != st.Selection.Node
 		plan["nodeListChecked"] = true

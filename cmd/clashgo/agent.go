@@ -193,6 +193,9 @@ func (a *App) statusFilePath() string {
 // (the CLI's offline path, external monitors). Best effort: a failed
 // write must never disturb the app.
 func (a *App) writeStatusFile() {
+	if !a.settings().AgentSurface {
+		return
+	}
 	data, err := json.Marshal(a.buildStatus())
 	if err != nil {
 		return

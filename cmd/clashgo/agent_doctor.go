@@ -181,14 +181,14 @@ func runDoctor(store *config.Store) doctorReport {
 	}
 
 	if tunMode {
-		if ifc, err := net.InterfaceByName("Meta"); err == nil {
+		if ifc, err := net.InterfaceByName(config.TunDeviceName); err == nil {
 			if ifc.Flags&net.FlagUp != 0 && ifc.MTU == 1500 {
-				add("tun_device", "pass", "Meta 已 UP，MTU 1500")
+				add("tun_device", "pass", config.TunDeviceName+" 已 UP，MTU 1500")
 			} else {
-				add("tun_device", "fail", fmt.Sprintf("Meta flags=%v mtu=%d", ifc.Flags, ifc.MTU))
+				add("tun_device", "fail", fmt.Sprintf("%s flags=%v mtu=%d", config.TunDeviceName, ifc.Flags, ifc.MTU))
 			}
 		} else {
-			add("tun_device", "fail", "Meta 网卡不存在")
+			add("tun_device", "fail", config.TunDeviceName+" 网卡不存在")
 		}
 	} else {
 		add("tun_device", "skip", "当前不是 TUN 模式")

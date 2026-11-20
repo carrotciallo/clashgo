@@ -89,11 +89,12 @@ type App struct {
 	upRate, downRate int64
 	// dashboard data: core start time, controller round-trip,
 	// live connections, LAN address.
-	coreSince time.Time
-	coreRTT   time.Duration
-	conns     []core.Connection
-	localIP   string
-	gateway   string
+	coreSince      time.Time
+	coreRestartLog []time.Time
+	coreRTT        time.Duration
+	conns          []core.Connection
+	localIP        string
+	gateway        string
 	// session peak traffic rates for the overview cards.
 	maxUpRate, maxDownRate int64
 	overview               overviewFacts
@@ -139,6 +140,14 @@ type App struct {
 	setCorePath              string
 	setCorePage              bool
 	autoSw                   *bool
+	tunOnlySw                *bool
+	agentSw                  *bool
+	tunOnlyWant              *bool
+	agentWant                *bool
+	logLockSw                *bool
+	logLockWant              *bool
+	ctrlMu                   sync.Mutex
+	ctrlLn                   net.Listener
 	setMixed                 string
 	setCtrl                  string
 	setArm                   bool
@@ -417,6 +426,7 @@ func (a *App) startCore() {
 	a.coreSince = time.Now()
 	a.mu.Unlock()
 	a.emitEvent("core_started", map[string]any{"pid": a.sup.PID(), "tun": a.settings().TUNEnabled})
+	a.applyTunOnlyAtStart()
 	// Capture modes are mutually exclusive: exactly one of system
 	// proxy / TUN owns the machine's traffic at any time. A quit in
 	// flight must win over a capture switch still landing (the two
@@ -454,6 +464,45 @@ func (a *App) restartCore() {
 		}
 		a.setBusy(false, "")
 		a.startCore()
+	})
+}
+
+// onCoreUnexpectedExit is the core watchdog: a core that dies without
+// being asked to stop is restarted, with a bounded attempt rate so a
+// crash loop surfaces as a failure instead of spinning forever.
+func (a *App) onCoreUnexpectedExit() {
+	if a.quitting.Load() {
+		return
+	}
+	a.emitEvent("core_exited", map[string]any{"unexpected": true})
+	a.mu.Lock()
+	a.coreOK = false
+	now := time.Now()
+	kept := a.coreRestartLog[:0]
+	for _, t := range a.coreRestartLog {
+		if now.Sub(t) < 2*time.Minute {
+			kept = append(kept, t)
+		}
+	}
+	a.coreRestartLog = kept
+	if len(a.coreRestartLog) >= 3 {
+		a.mu.Unlock()
+		a.emitEvent("core_failed", map[string]any{"error": "核心反复异常退出，已停止自动重启"})
+		a.setMsg("核心反复异常退出，已停止自动重启，日志尾部见概览页。")
+		return
+	}
+	a.coreRestartLog = append(a.coreRestartLog, now)
+	a.mu.Unlock()
+	a.launch(func() {
+		time.Sleep(time.Second)
+		if a.quitting.Load() || a.sup.Running() {
+			return
+		}
+		a.operate(func() {
+			if !a.sup.Running() {
+				a.startCore()
+			}
+		})
 	})
 }
 
@@ -723,18 +772,17 @@ func (a *App) coreHealthy() bool {
 	return a.coreOK
 }
 
-func (a *App) switchNode(group, name string) {
-	a.operate(func() {
-		if err := a.client().Switch(group, name); err != nil {
-			a.setMsg("切换失败：%v", err)
-			return
-		}
-		a.emitEvent("node_switched", map[string]any{"group": group, "node": name})
-		a.setMsg("已切换：%s → %s", group, name)
-		a.refreshProxies()
-		time.Sleep(600 * time.Millisecond)
-		a.refreshEgress()
-	})
+// switchNodeNow runs under opMu, after selection policy validation.
+func (a *App) switchNodeNow(group, name string) *ctrlError {
+	if err := a.client().Switch(group, name); err != nil {
+		return ctrlErr("op_failed", "切换失败：%v", err)
+	}
+	a.emitEvent("node_switched", map[string]any{"group": group, "node": name})
+	a.setMsg("已切换：%s → %s", group, name)
+	a.refreshProxies()
+	time.Sleep(600 * time.Millisecond)
+	a.refreshEgress()
+	return nil
 }
 
 func (a *App) testDelay(group string) {
@@ -938,13 +986,25 @@ func (a *App) egressChainLocked() []string {
 // 国外流量， which lives in 节点选择）. This is the nodes page's
 // one-tap switch.
 func (a *App) useNode(name string) {
+	a.operate(func() {
+		if err := a.useNodeNow(name); err != nil {
+			a.setMsg("%s", err.Message)
+		}
+	})
+}
+
+// All GUI and control picker mutations reach this function under opMu. Never
+// report success based solely on an old effective selection (even a no-op).
+func (a *App) useNodeNow(name string) *ctrlError {
+	if !a.coreHealthy() {
+		return ctrlErr("core_down", "核心未运行，无法切换节点")
+	}
 	a.mu.Lock()
 	proxies := a.proxies
 	a.mu.Unlock()
 	picker, ok := proxies["节点选择"]
 	if !ok {
-		a.setMsg("核心未就绪，无法切换节点")
-		return
+		return ctrlErr("node_not_reachable", "核心未就绪，无法切换节点")
 	}
 	contains := func(list []string, s string) bool {
 		for _, v := range list {
@@ -955,34 +1015,28 @@ func (a *App) useNode(name string) {
 		return false
 	}
 	if contains(picker.All, name) {
-		a.switchNode("节点选择", name)
-		return
+		return a.switchNodeNow("节点选择", name)
 	}
 	for gname, g := range proxies {
 		if len(g.All) == 0 || gname == "节点选择" {
 			continue
 		}
 		if contains(g.All, name) && contains(picker.All, gname) {
-			gname := gname
-			a.operate(func() {
-				if err := a.client().Switch(gname, name); err != nil {
-					a.setMsg("切换失败：%v", err)
-					return
-				}
-				if err := a.client().Switch("节点选择", gname); err != nil {
-					a.setMsg("切换失败：%v", err)
-					return
-				}
-				a.emitEvent("node_switched", map[string]any{"group": "节点选择", "via": gname, "node": name})
-				a.setMsg("已切换：节点选择 → %s → %s", gname, name)
-				a.refreshProxies()
-				time.Sleep(600 * time.Millisecond)
-				a.refreshEgress()
-			})
-			return
+			if err := a.client().Switch(gname, name); err != nil {
+				return ctrlErr("op_failed", "切换失败：%v", err)
+			}
+			if err := a.client().Switch("节点选择", gname); err != nil {
+				return ctrlErr("op_failed", "切换失败：%v", err)
+			}
+			a.emitEvent("node_switched", map[string]any{"group": "节点选择", "via": gname, "node": name})
+			a.setMsg("已切换：节点选择 → %s → %s", gname, name)
+			a.refreshProxies()
+			time.Sleep(600 * time.Millisecond)
+			a.refreshEgress()
+			return nil
 		}
 	}
-	a.setMsg("节点 %s 不在可达分组里，无法直接切换", name)
+	return ctrlErr("node_not_reachable", "节点 %s 不在可达分组里，无法直接切换", name)
 }
 
 // ---- profiles （配置快速切换） ----

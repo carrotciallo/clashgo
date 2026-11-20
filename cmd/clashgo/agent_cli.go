@@ -33,7 +33,7 @@ const (
 var agentCommands = map[string]bool{
 	"status": true, "doctor": true, "mode": true, "route": true,
 	"node": true, "sub": true, "core": true, "logs": true,
-	"watch": true, "quit": true, "help": true,
+	"watch": true, "quit": true, "help": true, "tunonly": true,
 }
 
 // runAgentCLI reports whether the invocation was a CLI command, and
@@ -49,6 +49,8 @@ func runAgentCLI(args []string) (int, bool) {
 		return exitFailed, true
 	}
 	switch args[0] {
+	case "tunonly":
+		return cliTunOnly(store, args[1:]), true
 	case "help":
 		printAgentHelp()
 		return exitOK, true
@@ -69,6 +71,7 @@ func runAgentCLI(args []string) (int, bool) {
 func printAgentHelp() {
 	fmt.Println(`clashgo — agent CLI (schema v1, see AGENTS.md)
 
+  tunonly on|off|status       仅 TUN 出网模式（整机出站只经 TUN）
   status [--human]            实例/核心/接管/节点/订阅状态
   doctor [--human]            验收电池：逐项 pass/fail/skip
   mode get                    当前接管方式

@@ -60,6 +60,12 @@ func controlSocketPath(store *config.Store) string {
 
 func (a *App) serveControl() {
 	path := controlSocketPath(a.store)
+	a.ctrlMu.Lock()
+	if a.ctrlLn != nil {
+		a.ctrlMu.Unlock()
+		return
+	}
+	a.ctrlMu.Unlock()
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return
 	}
@@ -68,9 +74,19 @@ func (a *App) serveControl() {
 	if err != nil {
 		return
 	}
+	a.ctrlMu.Lock()
+	a.ctrlLn = ln
+	a.ctrlMu.Unlock()
 	_ = os.Chmod(path, 0o600)
-	defer ln.Close()
-	defer os.Remove(path)
+	defer func() {
+		a.ctrlMu.Lock()
+		if a.ctrlLn == ln {
+			a.ctrlLn = nil
+		}
+		a.ctrlMu.Unlock()
+		_ = ln.Close()
+		_ = os.Remove(path)
+	}()
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
@@ -78,6 +94,34 @@ func (a *App) serveControl() {
 		}
 		go a.handleControl(conn)
 	}
+}
+
+// stopControl closes the control listener; serveControl's deferred
+// cleanup removes the socket file.
+func (a *App) stopControl() {
+	a.ctrlMu.Lock()
+	ln := a.ctrlLn
+	a.ctrlMu.Unlock()
+	if ln != nil {
+		_ = ln.Close()
+	}
+}
+
+// setAgentSurface persists the agent-surface setting and applies it:
+// off closes the control socket and removes the status heartbeat file,
+// on reopens the socket.
+func (a *App) setAgentSurface(on bool) error {
+	if err := a.changeSettings(func(s *config.Settings) { s.AgentSurface = on }); err != nil {
+		return err
+	}
+	if on {
+		go a.serveControl()
+	} else {
+		a.stopControl()
+		_ = os.Remove(a.statusFilePath())
+	}
+	a.emitEvent("agent_surface_changed", map[string]any{"on": on})
+	return nil
 }
 
 func (a *App) handleControl(conn net.Conn) {
@@ -126,6 +170,9 @@ func (a *App) dispatchControl(req ctrlRequest) (any, *ctrlError, func()) {
 		after  func()
 	)
 	switch req.Cmd {
+	case "tunonly.on", "tunonly.off", "tunonly.status":
+		mutating = req.Cmd != "tunonly.status"
+		result, cerr = a.tunOnlyAction(strings.TrimPrefix(req.Cmd, "tunonly."))
 	case "status":
 		mutating = false
 		result = a.buildStatus()
@@ -282,7 +329,8 @@ func (a *App) nodeList() map[string]any {
 		}
 		pools[name] = names
 	}
-	return map[string]any{"groups": groups, "pools": pools}
+	result := map[string]any{"groups": groups, "pools": pools}
+	return result
 }
 
 func sortedKeys[V any](m map[string]V) []string {
@@ -292,38 +340,6 @@ func sortedKeys[V any](m map[string]V) []string {
 	}
 	sort.Strings(keys)
 	return keys
-}
-
-// nodeReachable mirrors useNode's reachability rule: the name is a
-// direct member of the picker group, or a member of a group the
-// picker can select.
-func (a *App) nodeReachable(name string) bool {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	picker, ok := a.proxies["节点选择"]
-	if !ok {
-		return false
-	}
-	contains := func(list []string, s string) bool {
-		for _, v := range list {
-			if v == s {
-				return true
-			}
-		}
-		return false
-	}
-	if contains(picker.All, name) {
-		return true
-	}
-	for gname, g := range a.proxies {
-		if gname == "节点选择" || len(g.All) == 0 {
-			continue
-		}
-		if contains(g.All, name) && contains(picker.All, gname) {
-			return true
-		}
-	}
-	return false
 }
 
 func (a *App) ctrlNodeSelect(raw json.RawMessage) (any, *ctrlError) {
@@ -336,13 +352,11 @@ func (a *App) ctrlNodeSelect(raw json.RawMessage) (any, *ctrlError) {
 	if strings.TrimSpace(args.Name) == "" {
 		return nil, ctrlErr("bad_request", "缺少节点名")
 	}
-	if !a.coreHealthy() {
-		return nil, ctrlErr("core_down", "核心未运行，无法切换节点")
+	a.opMu.Lock()
+	defer a.opMu.Unlock()
+	if err := a.useNodeNow(args.Name); err != nil {
+		return nil, err
 	}
-	if !a.nodeReachable(args.Name) {
-		return nil, ctrlErr("node_not_reachable", "节点 %s 不在可达分组里", args.Name)
-	}
-	a.useNode(args.Name)
 	if !waitFor(30*time.Second, func() bool {
 		chain := a.egressChain()
 		return len(chain) > 0 && chain[len(chain)-1] == args.Name

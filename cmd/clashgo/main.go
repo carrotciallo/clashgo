@@ -129,6 +129,9 @@ func main() {
 		HomeDir: store.RuntimeDir(),
 		LogPath: filepath.Join(store.LogsDir(), "core.log"),
 	}
+	a.sup.OnUnexpectedExit = a.onCoreUnexpectedExit
+	a.sup.BinPath = disguiseCoreLink(store.RuntimeDir(), coreBin)
+	a.sup.LogSealed = !set.LogLock
 	a.cli = core.NewClient(fmt.Sprintf("http://127.0.0.1:%d", set.ControllerPort), set.ControllerSecret)
 	a.px = sysproxy.New(store.StateDir, set.MixedPort)
 	a.startupMark("state_loaded")
@@ -142,7 +145,11 @@ func main() {
 	a.px.BeginSession()
 	a.startupMark("proxy_session_ready")
 	a.events = newEventLog(eventsPath(store))
-	go a.serveControl()
+	a.events.setSealed(!set.LogLock)
+	applyLogLock(store.LogsDir(), set.LogLock)
+	if a.settings().AgentSurface {
+		go a.serveControl()
+	}
 
 	sigc := make(chan os.Signal, 2)
 	signal.Notify(sigc, syscall.SIGTERM, syscall.SIGINT)

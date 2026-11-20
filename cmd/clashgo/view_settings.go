@@ -36,6 +36,90 @@ func (a *App) pageSettings(c *ui.Context) {
 		})
 	})
 
+	sectionHeader(c, "出网", "")
+	listCard(c, func() {
+		if a.tunOnlySw == nil {
+			b := a.settings().TunOnly
+			a.tunOnlySw = &b
+		}
+		switchRow(c, lucide.ShieldCheck(), "仅 TUN 出网", a.tunOnlySw)
+		if *a.tunOnlySw != a.settings().TunOnly && (a.tunOnlyWant == nil || *a.tunOnlyWant != *a.tunOnlySw) {
+			want := *a.tunOnlySw
+			a.tunOnlyWant = &want
+			a.operate(func() {
+				if err := a.setTunOnly(want); err != nil {
+					a.tunOnlyWant = nil
+					a.setMsg("仅 TUN 出网切换失败：%v", err)
+					b := a.settings().TunOnly
+					a.tunOnlySw = &b
+					return
+				}
+				a.tunOnlyWant = nil
+				if want {
+					a.setMsg("仅 TUN 出网已开启")
+				} else {
+					a.setMsg("仅 TUN 出网已关闭")
+				}
+			})
+		}
+	})
+
+	sectionHeader(c, "Agent", "")
+	listCard(c, func() {
+		if a.agentSw == nil {
+			b := a.settings().AgentSurface
+			a.agentSw = &b
+		}
+		switchRow(c, lucide.Bot(), "Agent 操作面", a.agentSw)
+		if *a.agentSw != a.settings().AgentSurface && (a.agentWant == nil || *a.agentWant != *a.agentSw) {
+			want := *a.agentSw
+			a.agentWant = &want
+			a.operate(func() {
+				if err := a.setAgentSurface(want); err != nil {
+					a.agentWant = nil
+					a.setMsg("Agent 操作面切换失败：%v", err)
+					b := a.settings().AgentSurface
+					a.agentSw = &b
+					return
+				}
+				a.agentWant = nil
+				if want {
+					a.setMsg("Agent 操作面已开启")
+				} else {
+					a.setMsg("Agent 操作面已关闭")
+				}
+			})
+		}
+	})
+
+	sectionHeader(c, "日志", "")
+	listCard(c, func() {
+		if a.logLockSw == nil {
+			b := a.settings().LogLock
+			a.logLockSw = &b
+		}
+		switchRow(c, lucide.ScrollText(), "日志锁", a.logLockSw)
+		if *a.logLockSw != a.settings().LogLock && (a.logLockWant == nil || *a.logLockWant != *a.logLockSw) {
+			want := *a.logLockSw
+			a.logLockWant = &want
+			a.operate(func() {
+				if err := a.setLogLock(want); err != nil {
+					a.logLockWant = nil
+					a.setMsg("日志锁切换失败：%v", err)
+					b := a.settings().LogLock
+					a.logLockSw = &b
+					return
+				}
+				a.logLockWant = nil
+				if want {
+					a.setMsg("日志锁已开启")
+				} else {
+					a.setMsg("日志已封存，不可读")
+				}
+			})
+		}
+	})
+
 	sectionHeader(c, "启动", "")
 	listCard(c, func() {
 		if a.autoSw == nil {

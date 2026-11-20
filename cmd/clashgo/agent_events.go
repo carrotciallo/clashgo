@@ -17,8 +17,18 @@ import (
 const eventLogMaxBytes = 2 << 20
 
 type eventLog struct {
-	mu   sync.Mutex
-	path string
+	mu     sync.Mutex
+	path   string
+	sealed bool
+}
+
+// setSealed switches the log to (or from) sealed mode: while sealed,
+// each emit briefly unseals the directory and file to write, then
+// seals them again (mode 0000).
+func (l *eventLog) setSealed(sealed bool) {
+	l.mu.Lock()
+	l.sealed = sealed
+	l.mu.Unlock()
 }
 
 func newEventLog(path string) *eventLog { return &eventLog{path: path} }
@@ -39,10 +49,19 @@ func (l *eventLog) emit(kind string, fields map[string]any) {
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	if l.sealed {
+		dir := filepath.Dir(l.path)
+		_ = os.Chmod(dir, 0o700)
+		_ = os.Chmod(l.path, 0o600)
+		defer func() {
+			_ = os.Chmod(l.path, 0o000)
+			_ = os.Chmod(dir, 0o000)
+		}()
+	}
 	if fi, err := os.Stat(l.path); err == nil && fi.Size() > eventLogMaxBytes {
 		_ = os.Rename(l.path, l.path+".1")
 	}
-	f, err := os.OpenFile(l.path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	f, err := os.OpenFile(l.path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 	if err != nil {
 		return
 	}
