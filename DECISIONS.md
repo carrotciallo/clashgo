@@ -2,6 +2,14 @@
 
 Lightweight decision log: date, decision, reason, what it supersedes.
 
+- **2026-11-21 — Tun-only egress mode instead of a workload guard.** A
+  kernel-interlock design for supervising one workload was reviewed and
+  dropped as disproportionate for a single-operator machine. Shipped
+  instead: an opt-in whole-machine tun-only mode (one fixed nft table;
+  the core's own dials carry a routing mark), a core watchdog, and
+  settings toggles for the agent surface and a sealable log directory.
+  No system service, no extra users, no latched state.
+
 - **2026-11-11 — Name: ClashGo.** Short, zero-explanation ("Clash client,
   written in Go"); the `carrotciallo/clashgo` repo slot was verified free.
   A handful of ≤2-star same-name repos exist (incl. one tiny mihomo
