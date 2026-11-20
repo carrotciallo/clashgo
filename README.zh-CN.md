@@ -4,7 +4,7 @@
 <h1 align="center">ClashGo</h1>
 <p align="center">配置归你，规则归你，订阅只提供节点。</p>
 <p align="center">
-  <img src="https://img.shields.io/badge/release-v0.1.0--rc.1-CAD1FA" alt="候选版本 v0.1.0-rc.1">
+  <img src="https://img.shields.io/badge/release-v0.1.0--rc.2-CAD1FA" alt="候选版本 v0.1.0-rc.2">
   <img src="https://img.shields.io/badge/platform-Linux-34364B" alt="Linux">
   <img src="https://img.shields.io/badge/Go-1.27.3-00ADD8" alt="Go 1.27.3">
   <img src="https://img.shields.io/badge/license-GPL--3.0-blue" alt="GPL-3.0">
@@ -36,6 +36,11 @@ ClashGo 不以兼容任意订阅策略组层级或其他客户端的合并脚本
 - 手动更新订阅、24 小时自动更新、重复请求合并和失败指数退避。
 - 启动时及时发布已验证的接管状态；出口 IP/组织信息查询不占用内核操作锁。固定名称的启动耗时标记便于定位延迟，不记录凭据。
 
+- 可选的**仅 TUN 出网模式**：物理口上一张固定 nft 表只放行核心（其出站带 routing mark）、节点地址、局域网与 DHCP，其余一律丢弃；由一个 root 属主的小 helper 施加，表保留到模式关闭为止。
+- **核心看门狗**：接管开启时核心意外退出会自动重启（有次数上限）；手动重启、停核与退出应用不触发。
+- **可关闭的 Agent 操作面**：CLI、控制套接字与状态文件可在设置里整体关闭，关后无控制监听、不写状态心跳。
+- **可封存的日志**：日志目录仅属主可读（0700/0600）；设置开关可把日志封存为 0000——任何人不可读——而记录照常继续。
+- 主机上的普通名字：TUN 设备名为 `enp7s0`，核心以中性的 `cored` 进程名运行。
 ## 构建与运行
 
 ### 环境要求

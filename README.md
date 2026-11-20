@@ -4,7 +4,7 @@
 <h1 align="center">ClashGo</h1>
 <p align="center">Your configuration. Your rules. Subscriptions are just node pools.</p>
 <p align="center">
-  <img src="https://img.shields.io/badge/release-v0.1.0--rc.1-CAD1FA" alt="Release candidate v0.1.0-rc.1">
+  <img src="https://img.shields.io/badge/release-v0.1.0--rc.2-CAD1FA" alt="Release candidate v0.1.0-rc.2">
   <img src="https://img.shields.io/badge/platform-Linux-34364B" alt="Linux">
   <img src="https://img.shields.io/badge/Go-1.27.3-00ADD8" alt="Go 1.27.3">
   <img src="https://img.shields.io/badge/license-GPL--3.0-blue" alt="GPL-3.0">
@@ -34,6 +34,11 @@ ClashGo is not a drop-in host for arbitrary subscription group hierarchies or an
 - Validated configuration edits and profile/settings changes, staged publication, and rollback on ordinary activation failures.
 - One instance per configuration directory, managed background tasks, stale-result rejection, and cancellable diagnostic requests.
 - Manual subscription refresh plus a 24-hour scheduler, duplicate-request coalescing, and exponential failure backoff.
+- Optional **tun-only egress mode**: one fixed nft table on the uplink admits only the core (its dials carry a routing mark), the node endpoints, LAN and DHCP; everything else on the physical interface is dropped. A small root-owned helper applies it, and the table stays until the mode is switched off.
+- **Core watchdog**: an unexpected core exit while capture is on restarts the core (bounded retries). Manual restarts, stops and quits never trigger it.
+- **Switchable agent surface**: the CLI, control socket and status file can be turned off in Settings, leaving no control listener and no status heartbeat.
+- **Sealable logs**: the log directory is owner-only (0700/0600); a Settings toggle seals the logs to mode 0000 — unreadable to everyone — while logging continues.
+- Plain names on the host: the TUN device is `enp7s0` and the core runs under the neutral process name `cored`.
 - Immediate capture-status publication at startup; outbound IP/organization lookup does not hold the core-operation lock. Fixed-name startup timing milestones help diagnose delays without logging credentials.
 
 ## Build and run
