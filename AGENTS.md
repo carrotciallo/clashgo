@@ -23,6 +23,7 @@ GUI.
 | `clashgo sub list [--human]` | Subscriptions (never includes URLs) |
 | `clashgo sub refresh [name]` | Refresh one subscription, or all |
 | `clashgo core restart` | Restart the core |
+| `clashgo tunonly on\|off\|status` | Tun-only egress mode (uplink drops everything outside the core) |
 | `clashgo core stop [--yes]` | Stop the core and release the capture |
 | `clashgo quit [--yes]` | Quit the app |
 | `clashgo logs [--since 2h] [--human]` | Structured event log (JSONL) |
@@ -82,7 +83,7 @@ newline-delimited JSON request per connection:
 ```
 
 Commands: `status`, `node.list`, `sub.list`, `mode.set`,
-`route.set`, `node.select`, `sub.refresh`, `core.restart`,
+`route.set`, `node.select`, `sub.refresh`, `core.restart`, `tunonly.on`, `tunonly.off`,
 `core.stop`, `app.quit`.
 
 Error codes: `bad_request`, `unknown_command`, `quitting`,
